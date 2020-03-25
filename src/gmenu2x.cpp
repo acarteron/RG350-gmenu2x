@@ -494,8 +494,8 @@ void GMenu2X::readConfig(string conffile) {
 	evalIntConf( confInt, "videoBpp", 32, 16, 32 );
 
 	if (confStr["tvoutEncoding"] != "PAL") confStr["tvoutEncoding"] = "NTSC";
-	resX = constrain( confInt["resolutionX"], 320,1920 );
-	resY = constrain( confInt["resolutionY"], 240,1200 );
+	resX = constrain( confInt["resolutionX"], 640,1920 );
+	resY = constrain( confInt["resolutionY"], 480,1200 );
 }
 
 void GMenu2X::saveSelection() {
