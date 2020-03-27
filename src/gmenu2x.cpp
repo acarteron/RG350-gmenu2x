@@ -228,8 +228,8 @@ GMenu2X::GMenu2X()
 
 	halfX = resX/2;
 	halfY = resY/2;
-	bottomBarIconY = resY-9;
-	bottomBarTextY = resY-5;
+	bottomBarIconY = resY-36;
+	bottomBarTextY = resY-20;
 
 	/* Do not clear the screen on exit.
 	 * This may require an SDL patch available at
