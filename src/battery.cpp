@@ -36,8 +36,8 @@ static unsigned short getBatteryLevel()
 		fscanf(batteryHandle, "%d", &battval);
 		fclose(batteryHandle);
 
-		if (battval>90) return 5;
-		if (battval>70) return 4;
+		if (battval>80) return 5;
+		if (battval>65) return 4;
 		if (battval>50) return 3;
 		if (battval>30) return 2;
 		if (battval>10) return 1;

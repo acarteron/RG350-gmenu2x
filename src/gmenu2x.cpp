@@ -228,8 +228,8 @@ GMenu2X::GMenu2X()
 
 	halfX = resX/2;
 	halfY = resY/2;
-	bottomBarIconY = resY-18;
-	bottomBarTextY = resY-10;
+	bottomBarIconY = resY-9;
+	bottomBarTextY = resY-5;
 
 	/* Do not clear the screen on exit.
 	 * This may require an SDL patch available at
@@ -321,7 +321,7 @@ void GMenu2X::initBG() {
 		if (sd) sd->blit(*bgmain, 3, bottomBarIconY);
 	}
 
-	cpuX = 32 + font->write(*bgmain, getDiskFree(getHome().c_str()),
+	cpuX = 64 + font->write(*bgmain, getDiskFree(getHome().c_str()),
 			22, bottomBarTextY, Font::HAlignLeft, Font::VAlignMiddle);
 
 #ifdef ENABLE_CPUFREQ
