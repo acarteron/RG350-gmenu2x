@@ -37,7 +37,6 @@ Parses links files.
 */
 class LinkApp : public Link {
 private:
-	std::string sclock;
 	int iclock;
 	std::string exec, params, workdir, manual, selectordir, selectorfilter;
 	bool selectorbrowser, deletable, editable;
@@ -61,10 +60,10 @@ public:
 	bool isOpk() { return isOPK; }
 	const std::string &getOpkFile() { return opkFile; }
 
-	LinkApp(GMenu2X *gmenu2x, std::string const& linkfile, bool deletable,
+	LinkApp(GMenu2X& gmenu2x, std::string const& linkfile, bool deletable,
 				struct OPK *opk = NULL, const char *metadata = NULL);
 #else
-	LinkApp(GMenu2X *gmenu2x, std::string const& linkfile, bool deletable);
+	LinkApp(GMenu2X& gmenu2x, std::string const& linkfile, bool deletable);
 	bool isOpk() { return false; }
 #endif
 
@@ -72,10 +71,6 @@ public:
 
 	bool consoleApp = false;
 
-	const std::string &getExec();
-	void setExec(const std::string &exec);
-	const std::string &getParams();
-	void setParams(const std::string &params);
 	const std::string &getManual();
 	void setManual(const std::string &manual);
 	const std::string &getSelectorDir();
@@ -85,8 +80,7 @@ public:
 	const std::string &getSelectorFilter();
 	void setSelectorFilter(const std::string &selectorfilter);
 
-	int clock();
-	const std::string &clockStr(int maxClock);
+	int clock() { return iclock; }
 	void setClock(int mhz);
 
 	bool save();
@@ -97,7 +91,7 @@ public:
 	bool isEditable() { return editable; }
 
 	const std::string &getFile() { return file; }
-	void renameFile(const std::string &name);
+	void setFile(const std::string &name);
 
 private:
 	void drawLaunch(Surface& s);

@@ -32,10 +32,9 @@ using std::string;
 using std::unique_ptr;
 
 MenuSettingBool::MenuSettingBool(
-		GMenu2X *gmenu2x, Touchscreen &ts,
+		GMenu2X& gmenu2x,
 		const string &name, const string &description, int *value)
 	: MenuSetting(gmenu2x, name, description)
-	, ts(ts)
 {
 	_ivalue = value;
 	_value = NULL;
@@ -45,10 +44,9 @@ MenuSettingBool::MenuSettingBool(
 }
 
 MenuSettingBool::MenuSettingBool(
-		GMenu2X *gmenu2x, Touchscreen &ts,
+		GMenu2X& gmenu2x,
 		const string &name, const string &description, bool *value)
 	: MenuSetting(gmenu2x, name, description)
-	, ts(ts)
 {
 	_value = value;
 	_ivalue = NULL;
@@ -60,16 +58,16 @@ MenuSettingBool::MenuSettingBool(
 void MenuSettingBool::initButton()
 {
 	buttonBox.add(unique_ptr<IconButton>(new IconButton(
-			gmenu2x, ts, "skin:imgs/buttons/accept.png",
-			gmenu2x->tr["Switch"],
+			gmenu2x, "skin:imgs/buttons/accept.png",
+			gmenu2x.tr["Switch"],
 			bind(&MenuSettingBool::toggle, this))));
 }
 
 void MenuSettingBool::draw(int valueX, int y, int h)
 {
-	Surface& s = *gmenu2x->s;
+	Surface& s = *gmenu2x.s;
 	MenuSetting::draw(valueX, y, h);
-	gmenu2x->font->write(s, strvalue, valueX, y, Font::HAlignLeft, Font::VAlignTop);
+	gmenu2x.font->write(s, strvalue, valueX, y, Font::HAlignLeft, Font::VAlignTop);
 }
 
 bool MenuSettingBool::handleButtonPress(InputManager::Button button)

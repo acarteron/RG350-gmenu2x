@@ -7,7 +7,6 @@
 #include "inputmanager.h"
 
 class Surface;
-class Touchscreen;
 
 
 /**
@@ -37,16 +36,11 @@ public:
 	 */
 	virtual bool handleButtonPress(InputManager::Button button) = 0;
 
-	/**
-	 * Handles the touch screen.
-	 * Only called if there is a touch screen available.
-	 * Returns true iff the touch screen was fully handled by this layer.
-	 */
-	virtual bool handleTouchscreen(Touchscreen &ts) = 0;
-
 	Status getStatus() { return status; }
 
 protected:
+	Layer() {}
+
 	/**
 	 * Request the Layer to be removed from the stack.
 	 * There could be a few more calls to the Layer before it is actually

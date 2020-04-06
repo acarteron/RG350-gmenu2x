@@ -54,15 +54,14 @@ private:
 		int curr;
 	};
 
-	GMenu2X *gmenu2x;
-	Touchscreen &ts;
+	GMenu2X& gmenu2x;
 	IconButton btnContextMenu;
 	int iSection, iLink;
-	uint iFirstDispRow;
+	uint32_t iFirstDispRow;
 	std::vector<std::string> sections;
-	std::vector<std::vector<Link*>> links;
+	std::vector<std::vector<std::unique_ptr<Link>>> links;
 
-	uint linkColumns, linkRows;
+	uint32_t linkColumns, linkRows;
 
 	Animation sectionAnimation;
 
@@ -72,24 +71,30 @@ private:
 	 */
 	void calcSectionRange(int &leftSection, int &rightSection);
 
-	std::vector<Link*> *sectionLinks(int i = -1);
-
 	void readLinks();
 	void freeLinks();
 
 	// Load all the sections of the given "sections" directory.
-	void readSections(std::string parentDir);
+	void readSections(std::string const& parentDir);
 
 #ifdef HAVE_LIBOPK
 	// Load all the .opk packages of the given directory
-	void readPackages(std::string parentDir);
+	bool readPackages(std::string const& parentDir);
 #ifdef ENABLE_INOTIFY
 	std::vector<std::unique_ptr<Monitor>> monitors;
 #endif
 #endif
 
 	// Load all the links on the given section directory.
-	void readLinksOfSection(std::string const& path, uint i);
+	void readLinksOfSection(std::vector<std::unique_ptr<Link>>& links,
+							std::string const& path, bool deletable);
+
+	/**
+	 * Attempts to creates a section directory if it does not exist yet.
+	 * @return The full path of the section directory, or the empty string
+	 *         if the directory could not be created.
+	 */
+	std::string createSectionDir(std::string const& sectionName);
 
 	void decSectionIndex();
 	void incSectionIndex();
@@ -101,14 +106,14 @@ private:
 public:
 	typedef std::function<void(void)> Action;
 
-	Menu(GMenu2X *gmenu2x, Touchscreen &ts);
+	Menu(GMenu2X& gmenu2x);
 	virtual ~Menu();
 
 #ifdef HAVE_LIBOPK
-	void openPackage(std::string path, bool order = true);
-	void openPackagesFromDir(std::string path);
+	void openPackage(std::string const& path, bool order = true);
+	void openPackagesFromDir(std::string const& path);
 #ifdef ENABLE_INOTIFY
-	void removePackageLink(std::string path);
+	void removePackageLink(std::string const& path);
 #endif
 #endif
 
@@ -116,13 +121,28 @@ public:
 	const std::string &selSection();
 	void setSectionIndex(int i);
 
-	void addActionLink(uint section, const std::string &title,
-			Action action, const std::string &description="",
-			const std::string &icon="");
-	bool addLink(std::string path, std::string file, std::string section="");
-	bool addSection(const std::string &sectionName);
+	void addActionLink(uint32_t section, std::string const& title,
+			Action action, std::string const& description="",
+			std::string const& icon="");
+	bool addLink(std::string const& path, std::string const& file);
+
+	/**
+	 * Looks up a section by name, adding it if it doesn't exist yet.
+	 * @return The index of the section.
+	 */
+	int sectionNamed(const char *sectionName);
+	/**
+	 * Looks up a section by name, adding it if it doesn't exist yet.
+	 * @return The index of the section.
+	 */
+	int sectionNamed(std::string const& sectionName) {
+		return sectionNamed(sectionName.c_str());
+	}
+
 	void deleteSelectedLink();
 	void deleteSelectedSection();
+
+	bool moveSelectedLink(std::string const& newSection);
 
 	void skinUpdated();
 	void orderLinks();
@@ -131,9 +151,6 @@ public:
 	virtual bool runAnimations();
 	virtual void paint(Surface &s);
 	virtual bool handleButtonPress(InputManager::Button button);
-	virtual bool handleTouchscreen(Touchscreen &ts);
-
-	bool linkChangeSection(uint linkIndex, uint oldSectionIndex, uint newSectionIndex);
 
 	int selLinkIndex();
 	Link *selLink();
@@ -141,7 +158,7 @@ public:
 	void setLinkIndex(int i);
 
 	const std::vector<std::string> &getSections() { return sections; }
-	void renameSection(int index, const std::string &name);
+	std::vector<std::unique_ptr<Link>> *sectionLinks(int i = -1);
 };
 
 #endif // MENU_H

@@ -24,20 +24,13 @@
 #include <SDL.h>
 #include <string>
 #include <vector>
+#include <array>
 
 #define INPUT_KEY_REPEAT_DELAY 250
 
 class GMenu2X;
 class Menu;
-class PowerSaver;
 class InputManager;
-
-enum EventCode {
-	REMOVE_LINKS,
-	OPEN_PACKAGE,
-	OPEN_PACKAGES_FROM_DIR,
-	REPAINT_MENU,
-};
 
 #ifndef SDL_JOYSTICK_DISABLED
 #define AXIS_STATE_POSITIVE 0
@@ -58,14 +51,16 @@ public:
 		ACCEPT, CANCEL,
 		ALTLEFT, ALTRIGHT,
 		MENU, SETTINGS,
-		REPAINT,
+		// Events that are not actually buttons:
+		// (not included in BUTTON_TYPE_SIZE)
+		REPAINT, QUIT,
 	};
-	#define BUTTON_TYPE_SIZE 10
+	static constexpr size_t BUTTON_TYPE_SIZE = 10;
 
-	InputManager(PowerSaver& powerSaver);
+	InputManager(GMenu2X& gmenu2x);
 	~InputManager();
 
-	bool init(GMenu2X *gmenu2x, Menu *menu);
+	bool init(Menu *menu);
 	Button waitForPressedButton();
 	void repeatRateChanged();
 	Uint32 joystickRepeatCallback(Uint32 timeout, struct Joystick *joystick);
@@ -80,11 +75,10 @@ private:
 		unsigned int kb_code, js_code;
 	};
 
-	GMenu2X *gmenu2x;
+	GMenu2X& gmenu2x;
 	Menu *menu;
-	PowerSaver& powerSaver;
 
-	ButtonMapEntry buttonMap[BUTTON_TYPE_SIZE];
+	std::array<ButtonMapEntry, BUTTON_TYPE_SIZE> buttonMap;
 #ifndef SDL_JOYSTICK_DISABLED
 	std::vector<Joystick> joysticks;
 

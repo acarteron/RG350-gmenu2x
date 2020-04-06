@@ -21,6 +21,7 @@
 #include "linkapp.h"
 
 #include "debug.h"
+#include "buildopts.h"
 #include "gmenu2x.h"
 #include "launcher.h"
 #include "layer.h"
@@ -72,28 +73,24 @@ public:
 		return true;
 	}
 
-	bool handleTouchscreen(Touchscreen&) override {
-		return true;
-	}
-
 private:
 	LinkApp& app;
 };
 
 
 #ifdef HAVE_LIBOPK
-LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable,
+LinkApp::LinkApp(GMenu2X& gmenu2x, string const& linkfile, bool deletable,
 			struct OPK *opk, const char *metadata_)
 #else
-LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
+LinkApp::LinkApp(GMenu2X& gmenu2x, string const& linkfile, bool deletable)
 #endif
-	: Link(gmenu2x_, bind(&LinkApp::start, this))
+	: Link(gmenu2x, bind(&LinkApp::start, this))
 	, deletable(deletable)
 {
 	manual = "";
 	file = linkfile;
 #ifdef ENABLE_CPUFREQ
-	setClock(gmenu2x->getDefaultAppClock());
+	setClock(gmenu2x.cpu.getDefaultAppClock());
 #else
 	setClock(0);
 #endif
@@ -140,15 +137,15 @@ LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
 				if (pos != category.npos)
 					category = category.substr(0, pos);
 
-			} else if ((!strncmp(key, "Name", lkey) && title.empty())
-						|| !strncmp(key, ("Name[" + gmenu2x->tr["Lng"] +
+			} else if ((!strncmp(key, "Name", lkey) && getTitle().empty())
+						|| !strncmp(key, ("Name[" + gmenu2x.tr["Lng"] +
 								"]").c_str(), lkey)) {
-				title = buf;
+				setTitle(buf);
 
-			} else if ((!strncmp(key, "Comment", lkey) && description.empty())
+			} else if ((!strncmp(key, "Comment", lkey) && getDescription().empty())
 						|| !strncmp(key, ("Comment[" +
-								gmenu2x->tr["Lng"] + "]").c_str(), lkey)) {
-				description = buf;
+								gmenu2x.tr["Lng"] + "]").c_str(), lkey)) {
+				setDescription(buf);
 
 			} else if (!strncmp(key, "Terminal", lkey)) {
 				consoleApp = !strncmp(val, "true", lval);
@@ -159,7 +156,7 @@ LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
 			} else if (!strncmp(key, "Icon", lkey)) {
 				/* Read the icon from the OPK only
 				 * if it doesn't exist on the skin */
-				this->icon = gmenu2x->sc.getSkinFilePath("icons/" + (string) buf + ".png");
+				this->icon = gmenu2x.sc.getSkinFilePath("icons/" + (string) buf + ".png");
 				if (this->icon.empty()) {
 					this->icon = linkfile + '#' + buf + ".png";
 				}
@@ -171,7 +168,7 @@ LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
 
 				for (auto token : tokens) {
 					if (tmp.find(token) != tmp.npos) {
-						selectordir = CARD_ROOT;
+						selectordir = GMENU2X_CARD_ROOT;
 						appTakesFileArg = true;
 						break;
 					}
@@ -202,7 +199,7 @@ LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
 
 				/* Remove last comma */
 				if (!selectorfilter.empty()) {
-					selectorfilter.erase(selectorfilter.end());
+					selectorfilter.pop_back();
 					DEBUG("Compatible extensions: %s\n", selectorfilter.c_str());
 				}
 
@@ -211,11 +208,17 @@ LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
 #endif /* HAVE_LIBXDGMIME */
 		}
 
-		file = gmenu2x->getHome() + "/sections/" + category + '/' + opkMount;
+		file = gmenu2x.getHome() + "/sections/" + category + '/' + opkMount;
 		opkMount = (string) "/mnt/" + opkMount + '/';
 		edited = true;
-	}
+	} else
 #endif /* HAVE_LIBOPK */
+	{
+		// Non-packaged application.
+
+		// Consider non-deletable applications to be immutable.
+		editable = deletable;
+	}
 
 	string line;
 	ifstream infile (file.c_str(), ios_base::in);
@@ -236,9 +239,9 @@ LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
 			if (value=="false") selectorbrowser = false;
 		} else if (!isOpk()) {
 			if (name == "title") {
-				title = value;
+				setTitle(value);
 			} else if (name == "description") {
-				description = value;
+				setDescription(value);
 			} else if (name == "launchmsg") {
 				launchMsg = value;
 			} else if (name == "icon") {
@@ -268,8 +271,8 @@ LinkApp::LinkApp(GMenu2X *gmenu2x_, string const& linkfile, bool deletable)
 
 void LinkApp::loadIcon() {
 	if (icon.compare(0, 5, "skin:") == 0) {
-		string linkIcon = gmenu2x->sc.getSkinFilePath(
-				icon.substr(5, string::npos));
+		string linkIcon = gmenu2x.sc.getSkinFilePath(
+				icon.substr(5));
 		if (!fileExists(linkIcon))
 			searchIcon();
 		else
@@ -291,34 +294,20 @@ const string &LinkApp::searchIcon() {
 	string exectitle = execicon;
 	pos = execicon.rfind("/");
 	if (pos != string::npos)
-		string exectitle = execicon.substr(pos+1,execicon.length());
+		string exectitle = execicon.substr(pos+1);
 
-	if (!gmenu2x->sc.getSkinFilePath("icons/"+exectitle).empty())
-		iconPath = gmenu2x->sc.getSkinFilePath("icons/"+exectitle);
+	if (!gmenu2x.sc.getSkinFilePath("icons/"+exectitle).empty())
+		iconPath = gmenu2x.sc.getSkinFilePath("icons/"+exectitle);
 	else if (fileExists(execicon))
 		iconPath = execicon;
 	else
-		iconPath = gmenu2x->sc.getSkinFilePath("icons/generic.png");
+		iconPath = gmenu2x.sc.getSkinFilePath("icons/generic.png");
 
 	return iconPath;
 }
 
-int LinkApp::clock() {
-	return iclock;
-}
-
-const string &LinkApp::clockStr(int maxClock) {
-	if (iclock>maxClock) setClock(maxClock);
-	return sclock;
-}
-
-void LinkApp::setClock(int mhz) {
-	iclock = mhz;
-	stringstream ss;
-	sclock = "";
-	ss << iclock << "MHz";
-	ss >> sclock;
-
+void LinkApp::setClock(int khz) {
+	iclock = khz;
 	edited = true;
 }
 
@@ -328,12 +317,17 @@ bool LinkApp::targetExists()
 }
 
 bool LinkApp::save() {
-	if (!edited) return false;
+	// TODO: In theory a non-editable Link wouldn't have 'edited' set, but
+	//       currently 'edited' is set on more than a few non-edits, so this
+	//       extra check helps prevent write attempts that will never succeed.
+	//       Maybe we shouldn't have an 'edited' flag at all and make the
+	//       outside world fully responsible for calling save() when needed.
+	if (!editable || !edited) return true;
 
 	std::ostringstream out;
 	if (!isOpk()) {
-		if (!title.empty()       ) out << "title="           << title           << endl;
-		if (!description.empty() ) out << "description="     << description     << endl;
+		if (!getTitle().empty()       ) out << "title="      << getTitle()      << endl;
+		if (!getDescription().empty() ) out << "description="<< getDescription()<< endl;
 		if (!launchMsg.empty()   ) out << "launchmsg="       << launchMsg       << endl;
 		if (!icon.empty()        ) out << "icon="            << icon            << endl;
 		if (!exec.empty()        ) out << "exec="            << exec            << endl;
@@ -348,14 +342,15 @@ bool LinkApp::save() {
 
 	if (out.tellp() > 0) {
 		DEBUG("Saving app settings: %s\n", file.c_str());
-		ofstream f(file.c_str());
-		if (f.is_open()) {
-			f << out.str();
-			f.close();
-			sync();
+		if (writeStringToFile(file, out.str())) {
+			string dir = parentDir(file);
+			if (!syncDir(dir)) {
+				ERROR("Failed to sync dir: %s\n", dir.c_str());
+				// Note: Even if syncDir fails, the app settings have been
+				//       written, so have save() return true.
+			}
 			return true;
 		} else {
-			ERROR("Error while opening the file '%s' for write.\n", file.c_str());
 			return false;
 		}
 	} else {
@@ -366,33 +361,41 @@ bool LinkApp::save() {
 
 void LinkApp::drawLaunch(Surface& s) {
 	//Darkened background
-	s.box(0, 0, gmenu2x->resX, gmenu2x->resY, 0,0,0,150);
+	s.box(0, 0, gmenu2x.width(), gmenu2x.height(), 0, 0, 0, 150);
 
 	string text = getLaunchMsg().empty()
-		? gmenu2x->tr.translate("Launching $1", getTitle().c_str(), nullptr)
-		: gmenu2x->tr.translate(getLaunchMsg().c_str(), nullptr);
+		? gmenu2x.tr.translate("Launching $1", getTitle().c_str(), nullptr)
+		: gmenu2x.tr.translate(getLaunchMsg().c_str(), nullptr);
 
-	int textW = gmenu2x->font->getTextWidth(text);
+	int textW = gmenu2x.font->getTextWidth(text);
 	int boxW = 62+textW;
 	int halfBoxW = boxW/2;
 
 	//outer box
-	s.box(gmenu2x->halfX-2-halfBoxW, gmenu2x->halfY-23, halfBoxW*2+5, 47, gmenu2x->skinConfColors[COLOR_MESSAGE_BOX_BG]);
+	s.box(gmenu2x.width() / 2 - 2 - halfBoxW,
+	      gmenu2x.height() / 2 - 23,
+	      halfBoxW * 2 + 5, 47,
+	      gmenu2x.skinConfColors[COLOR_MESSAGE_BOX_BG]);
 	//inner rectangle
-	s.rectangle(gmenu2x->halfX-halfBoxW, gmenu2x->halfY-21, boxW, 42, gmenu2x->skinConfColors[COLOR_MESSAGE_BOX_BORDER]);
+	s.rectangle(gmenu2x.width() / 2 - halfBoxW,
+		    gmenu2x.height() / 2 - 21, boxW,
+		    42, gmenu2x.skinConfColors[COLOR_MESSAGE_BOX_BORDER]);
 
-	int x = gmenu2x->halfX+10-halfBoxW;
+	int x = gmenu2x.width() / 2 + 10 - halfBoxW;
 	/*if (!getIcon().empty())
-		gmenu2x->sc[getIcon()]->blit(gmenu2x->s,x,104);
+		gmenu2x.sc[getIcon()]->blit(gmenu2x.s,x,104);
 	else
-		gmenu2x->sc["icons/generic.png"]->blit(gmenu2x->s,x,104);*/
-	iconSurface->blit(s, x, gmenu2x->halfY - 16);
-	gmenu2x->font->write(s, text, x + 42, gmenu2x->halfY + 1, Font::HAlignLeft, Font::VAlignMiddle);
+		gmenu2x.sc["icons/generic.png"]->blit(gmenu2x.s,x,104);*/
+	if (iconSurface) {
+		iconSurface->blit(s, x, gmenu2x.height() / 2 - 16);
+	}
+	gmenu2x.font->write(s, text, x + 42, gmenu2x.height() / 2 + 1,
+			    Font::HAlignLeft, Font::VAlignMiddle);
 }
 
 void LinkApp::start() {
 	if (selectordir.empty()) {
-		gmenu2x->queueLaunch(prepareLaunch(""), make_shared<LaunchLayer>(*this));
+		gmenu2x.queueLaunch(prepareLaunch(""), make_shared<LaunchLayer>(*this));
 	} else {
 		selector();
 	}
@@ -404,28 +407,21 @@ void LinkApp::showManual() {
 
 #ifdef HAVE_LIBOPK
 	if (isOPK) {
-		vector<string> readme;
-		char *ptr;
-		struct OPK *opk;
-		int err;
-		void *buf;
-		size_t len;
-
-		opk = opk_open(opkFile.c_str());
+		struct OPK *opk = opk_open(opkFile.c_str());
 		if (!opk) {
 			WARNING("Unable to open OPK to read manual\n");
 			return;
 		}
 
-		err = opk_extract_file(opk, manual.c_str(), &buf, &len);
+		void *buf;
+		size_t len;
+		int err = opk_extract_file(opk, manual.c_str(), &buf, &len);
+		opk_close(opk);
 		if (err < 0) {
-			WARNING("Unable to read manual from OPK\n");
+			WARNING("Unable to extract manual from OPK\n");
 			return;
 		}
-		opk_close(opk);
-
-		ptr = (char *) buf;
-		string str(ptr, len);
+		string str((char *) buf, len);
 		free(buf);
 
 		if (manual.substr(manual.size()-8,8)==".man.txt") {
@@ -443,18 +439,13 @@ void LinkApp::showManual() {
 
 	// Png manuals
 	if (manual.substr(manual.size()-8,8)==".man.png") {
-#ifdef ENABLE_CPUFREQ
-		//Raise the clock to speed-up the loading of the manual
-		gmenu2x->setSafeMaxClock();
-#endif
-
 		auto pngman = OffscreenSurface::loadImage(manual);
 		if (!pngman) {
 			return;
 		}
-		auto bg = OffscreenSurface::loadImage(gmenu2x->confStr["wallpaper"]);
+		auto bg = OffscreenSurface::loadImage(gmenu2x.confStr["wallpaper"]);
 		if (!bg) {
-			bg = OffscreenSurface::emptySurface(gmenu2x->s->width(), gmenu2x->s->height());
+			bg = OffscreenSurface::emptySurface(gmenu2x.width(), gmenu2x.height());
 		}
 		bg->convertToDisplayFormat();
 
@@ -462,42 +453,42 @@ void LinkApp::showManual() {
 		string pageStatus;
 
 		bool close = false, repaint = true;
-		int page = 0, pagecount = pngman->width() / 320;
+		int page = 0, pagecount = pngman->width() / gmenu2x.width();
 
 		ss << pagecount;
 		string spagecount;
 		ss >> spagecount;
 
-#ifdef ENABLE_CPUFREQ
-		//Lower the clock
-		gmenu2x->setMenuClock();
-#endif
-
 		while (!close) {
-			OutputSurface& s = *gmenu2x->s;
+			OutputSurface& s = *gmenu2x.s;
 
 			if (repaint) {
 				bg->blit(s, 0, 0);
-				pngman->blit(s, -page*320, 0);
+				pngman->blit(s, -page * gmenu2x.width(), 0);
 
-				gmenu2x->drawBottomBar(s);
+				gmenu2x.drawBottomBar(s);
 				int x = 5;
-				x = gmenu2x->drawButton(s, "left", "", x);
-				x = gmenu2x->drawButton(s, "right", gmenu2x->tr["Change page"], x);
-				x = gmenu2x->drawButton(s, "cancel", "", x);
-				x = gmenu2x->drawButton(s, "start", gmenu2x->tr["Exit"], x);
+				x = gmenu2x.drawButton(s, "left", "", x);
+				x = gmenu2x.drawButton(s, "right", gmenu2x.tr["Change page"], x);
+				x = gmenu2x.drawButton(s, "cancel", "", x);
+				x = gmenu2x.drawButton(s, "start", gmenu2x.tr["Exit"], x);
+				(void)x;
 
 				ss.clear();
 				ss << page+1;
 				ss >> pageStatus;
-				pageStatus = gmenu2x->tr["Page"]+": "+pageStatus+"/"+spagecount;
-				gmenu2x->font->write(s, pageStatus, 310, 230, Font::HAlignRight, Font::VAlignMiddle);
+				pageStatus = gmenu2x.tr["Page"]+": "+pageStatus+"/"+spagecount;
+				gmenu2x.font->write(s, pageStatus,
+						    gmenu2x.width() - 10,
+						    gmenu2x.height() - 10,
+						    Font::HAlignRight,
+						    Font::VAlignMiddle);
 
 				s.flip();
 				repaint = false;
 			}
 
-            switch(gmenu2x->input.waitForPressedButton()) {
+            switch(gmenu2x.input.waitForPressedButton()) {
 				case InputManager::SETTINGS:
                 case InputManager::CANCEL:
                     close = true;
@@ -523,7 +514,7 @@ void LinkApp::showManual() {
 
 	// Txt manuals
 	if (manual.substr(manual.size()-8,8)==".man.txt") {
-		string text(readFileAsString(manual.c_str()));
+		string text(readFileAsString(manual));
 		TextManualDialog tmd(gmenu2x, getTitle(), getIconPath(), text);
 		tmd.exec();
 		return;
@@ -552,15 +543,17 @@ void LinkApp::selector(int startSelection, const string &selectorDir) {
 		if (!selectedDir.empty()) {
 			selectordir = selectedDir;
 		}
-		gmenu2x->writeTmp(selection, selectedDir);
-		gmenu2x->queueLaunch(
+		gmenu2x.writeTmp(selection, selectedDir);
+		gmenu2x.queueLaunch(
 				prepareLaunch(selectedDir + sel.getFile()),
 				make_shared<LaunchLayer>(*this));
 	}
 }
 
 unique_ptr<Launcher> LinkApp::prepareLaunch(const string &selectedFile) {
-	save();
+	if (!save()) {
+		ERROR("Error saving app settings to '%s'.\n", file.c_str());
+	}
 
 	if (!isOpk()) {
 		//Set correct working directory
@@ -591,7 +584,7 @@ unique_ptr<Launcher> LinkApp::prepareLaunch(const string &selectedFile) {
 		}
 	}
 
-	if (gmenu2x->confInt["outputLogs"] && !consoleApp) {
+	if (gmenu2x.confInt["outputLogs"] && !consoleApp) {
 		int fd = open(LOG_FILE, O_WRONLY | O_TRUNC | O_CREAT, 0644);
 		if (fd < 0) {
 			ERROR("Unable to open log file for write: %s\n", LOG_FILE);
@@ -603,15 +596,13 @@ unique_ptr<Launcher> LinkApp::prepareLaunch(const string &selectedFile) {
 		}
 	}
 
-	gmenu2x->saveSelection();
+	gmenu2x.saveSelection();
 
 	if (selectedFile.empty()) {
-		gmenu2x->writeTmp();
+		gmenu2x.writeTmp();
 	}
 #ifdef ENABLE_CPUFREQ
-	if (clock() != gmenu2x->confInt["menuClock"]) {
-		gmenu2x->setClock(clock());
-	}
+	gmenu2x.cpu.setCpuSpeed(clock());
 #endif
 
 	vector<string> commandLine;
@@ -628,24 +619,6 @@ unique_ptr<Launcher> LinkApp::prepareLaunch(const string &selectedFile) {
 
 	return std::unique_ptr<Launcher>(new Launcher(
 			move(commandLine), consoleApp));
-}
-
-const string &LinkApp::getExec() {
-	return exec;
-}
-
-void LinkApp::setExec(const string &exec) {
-	this->exec = exec;
-	edited = true;
-}
-
-const string &LinkApp::getParams() {
-	return params;
-}
-
-void LinkApp::setParams(const string &params) {
-	this->params = params;
-	edited = true;
 }
 
 const string &LinkApp::getManual() {
@@ -687,6 +660,6 @@ void LinkApp::setSelectorFilter(const string &selectorfilter) {
 	edited = true;
 }
 
-void LinkApp::renameFile(const string &name) {
+void LinkApp::setFile(const string &name) {
 	file = name;
 }

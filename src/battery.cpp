@@ -1,5 +1,5 @@
 #include "battery.h"
-
+#include "gmenu2x.h"
 #include "surfacecollection.h"
 
 #include <SDL.h>
@@ -13,47 +13,94 @@
  * @return A number representing battery charge: 0 means fully discharged,
  * 5 means fully charged, 6 represents running on external power.
  */
-static unsigned short getBatteryLevel()
+unsigned short Battery::getBatteryLevel()
 {
-	FILE *batteryHandle = NULL, *usbHandle = NULL;
+	unsigned long voltage_min = 0, voltage_max = 1, voltage_now = 1;
+	FILE *handle;
 
-#if defined(PLATFORM_A320) || defined(PLATFORM_GCW0) || defined(PLATFORM_NANONOTE)
-	usbHandle = fopen("/sys/class/power_supply/usb/online", "r");
-#endif
-	if (usbHandle) {
+	std::string path = powerSupplySysfs + "/status";
+	handle = fopen(path.c_str(), "r");
+	if (handle) {
+		char buf[16];
+
+		buf[sizeof(buf) - 1] = '\0';
+
+		fread(buf, 1, 16, handle);
+		if ((std::string)buf == "Charging")
+			return 6;
+	}
+
+	path = powerSupplySysfs + "/online";
+	handle = fopen(path.c_str(), "r");
+	if (handle) {
 		int usbval = 0;
-		fscanf(usbHandle, "%d", &usbval);
-		fclose(usbHandle);
+		fscanf(handle, "%d", &usbval);
+		fclose(handle);
 		if (usbval == 1)
 			return 6;
 	}
 
-#if defined(PLATFORM_A320) || defined(PLATFORM_GCW0) || defined(PLATFORM_NANONOTE)
-	batteryHandle = fopen("/sys/class/power_supply/battery/capacity", "r");
-#endif
-	if (batteryHandle) {
+	path = batterySysfs + "/capacity";
+	handle = fopen(path.c_str(), "r");
+	if (handle) {
 		int battval = 0;
-		fscanf(batteryHandle, "%d", &battval);
-		fclose(batteryHandle);
+		fscanf(handle, "%d", &battval);
+		fclose(handle);
 
-		if (battval>80) return 5;
-		if (battval>65) return 4;
+		if (battval>90) return 5;
+		if (battval>70) return 4;
 		if (battval>50) return 3;
 		if (battval>30) return 2;
 		if (battval>10) return 1;
+
+		return 0;
 	}
 
-	return 0;
+	/*
+	 * No 'capacity' file in sysfs - Do a dumb approximation of the capacity
+	 * using the current voltage reported and the min/max voltages of the
+	 * battery.
+	 */
+
+	path = batterySysfs + "/voltage_max_design";
+	handle = fopen(path.c_str(), "r");
+	if (handle) {
+		fscanf(handle, "%lu", &voltage_max);
+		fclose(handle);
+	}
+
+	path = batterySysfs + "/voltage_min_design";
+	handle = fopen(path.c_str(), "r");
+	if (handle) {
+		fscanf(handle, "%lu", &voltage_min);
+		fclose(handle);
+	}
+
+	path = batterySysfs + "/voltage_now";
+	handle = fopen(path.c_str(), "r");
+	if (handle) {
+		fscanf(handle, "%lu", &voltage_now);
+		fclose(handle);
+	}
+
+	return (voltage_now - voltage_min) * 6 / (voltage_max - voltage_min);
 }
 
-Battery::Battery(SurfaceCollection& sc_)
-	: sc(sc_)
+Battery::Battery(GMenu2X& gmenu2x)
+	: sc(gmenu2x.sc),
+	  batterySysfs(gmenu2x.confStr["batterySysfs"]),
+	  powerSupplySysfs(gmenu2x.confStr["powerSupplySysfs"])
 {
+	if (batterySysfs.empty())
+		batterySysfs = "/sys/class/power_supply/BAT0";
+	if (powerSupplySysfs.empty())
+		powerSupplySysfs = "/sys/class/power_supply/AC0";
+
 	lastUpdate = SDL_GetTicks();
 	update();
 }
 
-OffscreenSurface const& Battery::getIcon()
+const OffscreenSurface *Battery::getIcon()
 {
 	// Check battery status every 60 seconds.
 	unsigned int now = SDL_GetTicks();
@@ -62,7 +109,7 @@ OffscreenSurface const& Battery::getIcon()
 		update();
 	}
 
-	return *sc.skinRes(iconPath);
+	return sc.skinRes(iconPath);
 }
 
 void Battery::update()

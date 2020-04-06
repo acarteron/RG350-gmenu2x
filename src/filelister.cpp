@@ -20,6 +20,7 @@
 
 #include "filelister.h"
 
+#include "buildopts.h"
 #include "debug.h"
 #include "utilities.h"
 
@@ -89,15 +90,17 @@ bool FileLister::browse(const string& path, bool clean)
 	while (struct dirent *dptr = readdir(dirp)) {
 		// Ignore hidden files and optionally "..".
 		if (dptr->d_name[0] == '.') {
-			if (!(dptr->d_name[1] == '.' && showUpdir && slashedPath != "/")) {
+			if (!(dptr->d_name[1] == '.' && showUpdir
+			      && slashedPath != GMENU2X_CARD_ROOT "/")) {
 				continue;
 			}
 		}
 
-		bool isDir;
+		bool isDir, isFile;
 #ifdef _DIRENT_HAVE_D_TYPE
-		if (dptr->d_type != DT_UNKNOWN) {
+		if (dptr->d_type != DT_UNKNOWN && dptr->d_type != DT_LNK) {
 			isDir = dptr->d_type == DT_DIR;
+			isFile = dptr->d_type == DT_REG;
 		} else
 #endif
 		{
@@ -109,6 +112,7 @@ bool FileLister::browse(const string& path, bool clean)
 				continue;
 			}
 			isDir = S_ISDIR(st.st_mode);
+			isFile = S_ISREG(st.st_mode);
 		}
 
 		if (isDir) {
@@ -116,7 +120,7 @@ bool FileLister::browse(const string& path, bool clean)
 				continue;
 
 			directorySet.insert(string(dptr->d_name));
-		} else {
+		} else if (isFile) {
 			if (!showFiles)
 				continue;
 
@@ -130,10 +134,9 @@ bool FileLister::browse(const string& path, bool clean)
 			if (ext) ext++; else ext = "";
 
 			for (auto& filterExt : filter) {
-				// Note: strcasecmp can't compare multi-byte UTF-8 characters,
-				//       but the filtered file extensions don't contain any of
-				//       those.
-				if (strcasecmp(ext, filterExt.c_str()) == 0) {
+				// Note: this won't work with UTF8 characters but there shouldn't
+				// be any 
+				if (case_less::to_lower(ext) == case_less::to_lower(filterExt)) {
 					fileSet.insert(string(dptr->d_name));
 					break;
 				}
@@ -162,7 +165,7 @@ bool FileLister::browse(const string& path, bool clean)
 	return true;
 }
 
-string FileLister::operator[](uint x)
+string FileLister::operator[](size_t x)
 {
 	const auto dirCount = directories.size();
 	return x < dirCount ? directories[x] : files[x - dirCount];

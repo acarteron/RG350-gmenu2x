@@ -6,7 +6,9 @@
 
 #include <SDL.h>
 #include <SDL_ttf.h>
+
 #include <algorithm>
+#include <cassert>
 #include <vector>
 
 /* TODO: Let the theme choose the font and font size */
@@ -34,7 +36,7 @@ Font::Font(const std::string &path, unsigned int size)
 
 	font = TTF_OpenFont(path.c_str(), size);
 	if (!font) {
-		ERROR("Unable to open font\n");
+		ERROR("Unable to open font '%s'\n", TTF_FONT);
 		TTF_Quit();
 		return;
 	}
@@ -50,7 +52,7 @@ Font::~Font()
 	}
 }
 
-int Font::getTextWidth(const string &text)
+int Font::getTextWidth(const string &text) const
 {
 	if (!font) {
 		return 1;
@@ -187,14 +189,9 @@ string Font::wordWrapSingleLine(const string &text, size_t start, size_t end, in
 	return result;
 }
 
-int Font::getTextHeight(const string &text)
+int Font::getTextHeight(const string &text) const
 {
-	int nLines = 1;
-	size_t pos = 0;
-	while ((pos = text.find('\n', pos)) != string::npos) {
-		nLines++;
-		pos++;
-	}
+	int nLines = 1 + std::count(text.begin(), text.end(), '\n');
 	return nLines * getLineSpacing();
 }
 
@@ -295,4 +292,90 @@ int Font::writeLine(Surface& surface, std::string const& text,
 	SDL_FreeSurface(s);
 
 	return width;
+}
+
+static inline uint8_t *get_pixel8(SDL_Surface *s, int row, int col)
+{
+	uintptr_t row_addr = (uintptr_t)s->pixels + row * s->pitch;
+
+	assert(row < s->h);
+	assert(col < s->w);
+
+	return (uint8_t *)row_addr + col;
+}
+
+static inline uint32_t *get_pixel32(SDL_Surface *s, int row, int col)
+{
+	uintptr_t row_addr = (uintptr_t)s->pixels + row * s->pitch;
+
+	assert(row < s->h);
+	assert(col < s->w);
+
+	return (uint32_t *)row_addr + col;
+}
+
+std::unique_ptr<OffscreenSurface> Font::render(const std::string& line)
+{
+	SDL_Color color = { 0, 0, 0 };
+	SDL_Surface *s, *raw;
+	unsigned int i, j;
+
+	s = TTF_RenderUTF8_Shaded(font, line.c_str(), color, color);
+	if (!s)
+		return std::unique_ptr<OffscreenSurface>();
+
+	raw = SDL_CreateRGBSurface(SDL_SWSURFACE | SDL_SRCALPHA,
+				   s->w + 2, s->h + 2, 32,
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+				   0xff << 8, 0xff << 16, 0xff << 24, 0xff
+#else
+				   0xff << 16, 0xff << 8, 0xff, 0xff << 24
+#endif
+				   );
+
+	for (unsigned int row = 0; row < raw->h; row++) {
+		for (unsigned int col = 0; col < raw->w; col++) {
+			uint8_t center_a, north_a, south_a,
+				east_a, west_a, outline_a;
+
+			if (row > 0 && col > 0 && row <= s->h && col <= s->w)
+				center_a = *get_pixel8(s, row - 1, col - 1);
+			else
+				center_a = 0;
+
+			outline_a = center_a;
+
+			if (row >= 2 && col >= 1 && col <= s->w) {
+				north_a = *get_pixel8(s, row - 2, col - 1);
+				outline_a = std::max(outline_a, north_a);
+			}
+
+			if (row <= s->h - 1 && col >= 1 && col <= s->w) {
+				south_a = *get_pixel8(s, row, col - 1);
+				outline_a = std::max(outline_a, south_a);
+			}
+
+			if (row >= 1 && row <= s->h && col <= s->w - 1) {
+				east_a = *get_pixel8(s, row - 1, col);
+				outline_a = std::max(outline_a, east_a);
+			}
+
+			if (row >= 1 && row <= s->h && col >= 2) {
+				west_a = *get_pixel8(s, row - 1, col - 2);
+				outline_a = std::max(outline_a, west_a);
+			}
+
+			*get_pixel32(raw, row, col) =
+				(center_a << 16) | (center_a << 8) |
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+				(center_a << 24) | outline_a;
+#else
+				(outline_a << 24) | center_a;
+#endif
+		}
+	}
+
+	SDL_FreeSurface(s);
+
+	return std::unique_ptr<OffscreenSurface>(new OffscreenSurface(raw));
 }

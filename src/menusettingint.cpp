@@ -33,10 +33,10 @@ using std::stringstream;
 using std::unique_ptr;
 
 MenuSettingInt::MenuSettingInt(
-		GMenu2X *gmenu2x, Touchscreen &ts,
+		GMenu2X& gmenu2x,
 		const string &name, const string &description,
 		int *value, int min, int max, int increment)
-	: MenuSetting(gmenu2x,name,description)
+	: MenuSetting(gmenu2x, name, description)
 {
 	_value = value;
 	originalValue = *value;
@@ -50,25 +50,25 @@ MenuSettingInt::MenuSettingInt(
 	IconButton::Action actionDec = bind(&MenuSettingInt::dec, this);
 
 	buttonBox.add(unique_ptr<IconButton>(new IconButton(
-			gmenu2x, ts, "skin:imgs/buttons/l.png",
+			gmenu2x, "skin:imgs/buttons/l.png",
 			"", actionDec)));
 	buttonBox.add(unique_ptr<IconButton>(new IconButton(
-			gmenu2x, ts, "skin:imgs/buttons/left.png",
-			gmenu2x->tr["Decrease"], actionDec)));
+			gmenu2x, "skin:imgs/buttons/left.png",
+			gmenu2x.tr["Decrease"], actionDec)));
 
 	buttonBox.add(unique_ptr<IconButton>(new IconButton(
-			gmenu2x, ts, "skin:imgs/buttons/r.png",
+			gmenu2x, "skin:imgs/buttons/r.png",
 			"", actionInc)));
 	buttonBox.add(unique_ptr<IconButton>(new IconButton(
-			gmenu2x, ts, "skin:imgs/buttons/right.png",
-			gmenu2x->tr["Increase"], actionInc)));
+			gmenu2x, "skin:imgs/buttons/right.png",
+			gmenu2x.tr["Increase"], actionInc)));
 }
 
 void MenuSettingInt::draw(int valueX, int y, int h)
 {
-	Surface& s = *gmenu2x->s;
+	Surface& s = *gmenu2x.s;
 	MenuSetting::draw(valueX, y, h);
-	gmenu2x->font->write(s, strvalue, valueX, y, Font::HAlignLeft, Font::VAlignTop);
+	gmenu2x.font->write(s, strvalue, valueX, y, Font::HAlignLeft, Font::VAlignTop);
 }
 
 bool MenuSettingInt::handleButtonPress(InputManager::Button button)
@@ -104,7 +104,7 @@ void MenuSettingInt::dec()
 
 void MenuSettingInt::setValue(int value)
 {
-	*_value = constrain(value,min,max);
+	*_value = stdx::clamp(value,min,max);
 	stringstream ss;
 	ss << *_value;
 	strvalue = "";

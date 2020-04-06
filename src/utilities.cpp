@@ -18,6 +18,7 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
+#include "powersaver.h"
 #include "utilities.h"
 
 #include "debug.h"
@@ -28,37 +29,49 @@
 //for browsing the filesystem
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <fstream>
 #include <iostream>
-#include <strings.h>
+#include <sstream>
+#include <cctype>
+#include <experimental/filesystem>
 #include <unistd.h>
 
 using namespace std;
 
 bool case_less::operator()(const string &left, const string &right) const {
-	return strcasecmp(left.c_str(), right.c_str()) < 0;
+	return std::lexicographical_compare(left.begin(), left.end(),
+					    right.begin(), right.end());
+}
+
+std::string case_less::to_lower(std::string data)
+{
+	std::transform(data.begin(), data.end(), data.begin(), 
+		[](std::string::value_type c) { return std::tolower(c); }
+	);
+	return data;
 }
 
 string trim(const string& s) {
-  auto b = s.find_first_not_of(" \t\r");
-  auto e = s.find_last_not_of(" \t\r");
-  return b == string::npos ? "" : string(s, b, e + 1 - b);
+	auto b = s.find_first_not_of(" \t\r");
+	auto e = s.find_last_not_of(" \t\r");
+	return b == string::npos ? "" : string(s, b, e + 1 - b);
 }
 
 string ltrim(const string& s) {
-  auto b = s.find_first_not_of(" \t\r");
-  return b == string::npos ? "" : string(s, b);
+	auto b = s.find_first_not_of(" \t\r");
+	return b == string::npos ? "" : string(s, b);
 }
 
 string rtrim(const string& s) {
-  auto e = s.find_last_not_of(" \t\r");
-  return e == string::npos ? "" : string(s, 0, e + 1);
+	auto e = s.find_last_not_of(" \t\r");
+	return e == string::npos ? "" : string(s, 0, e + 1);
 }
 
 // See this article for a performance comparison of different approaches:
 //   http://insanecoding.blogspot.com/2011/11/how-to-read-in-file-in-c.html
-string readFileAsString(const char *filename) {
+string readFileAsString(string const& filename) {
 	ifstream in(filename, ios::in | ios::binary);
 	if (!in) {
 		return "<error opening " + string(filename) + ">";
@@ -81,6 +94,73 @@ string readFileAsString(const char *filename) {
 	}
 }
 
+constexpr int writeOpenFlags =
+#ifdef O_CLOEXEC
+		O_CLOEXEC | // Linux
+#endif
+		O_CREAT | O_WRONLY | O_TRUNC;
+
+// Use C functions since STL doesn't seem to have any way of applying fsync().
+bool writeStringToFile(string const& filename, string const& data) {
+	// Open temporary file.
+	string tempname = filename + '~';
+	int fd = open(tempname.c_str(), writeOpenFlags, S_IRUSR | S_IWUSR);
+	if (fd < 0) {
+		return false;
+	}
+
+	// Write temporary file.
+	const char *bytes = data.c_str();
+	size_t remaining = data.size();
+	bool ok = true;
+	while (remaining != 0) {
+		ssize_t written = write(fd, bytes, remaining);
+		if (written <= 0) {
+			ok = false;
+			break;
+		} else {
+			bytes += written;
+			remaining -= written;
+		}
+	}
+	if (ok) {
+		ok = fsync(fd) == 0;
+	}
+
+	// Close temporary file.
+	ok &= close(fd) == 0;
+
+	// Replace actual output file with temporary file.
+	if (ok) {
+		ok = rename(tempname.c_str(), filename.c_str()) == 0;
+	}
+
+	return ok;
+}
+
+constexpr int dirOpenFlags =
+#ifdef O_DIRECTORY
+		O_DIRECTORY | // Linux
+#endif
+#ifdef O_CLOEXEC
+		O_CLOEXEC | // Linux
+#endif
+		O_RDONLY;
+
+bool syncDir(string const& dirname)
+{
+	int fd = open(dirname.c_str(), dirOpenFlags);
+	if (fd < 0) {
+		return false;
+	}
+
+	bool ok = fsync(fd) == 0;
+
+	ok &= close(fd) == 0;
+
+	return ok;
+}
+
 string parentDir(string const& dir) {
 	// Note that size() is unsigned, so for short strings the '- 2' wraps
 	// around and as a result the entire string is searched, which is fine.
@@ -92,36 +172,17 @@ bool fileExists(const string &file) {
 	return access(file.c_str(), F_OK) == 0;
 }
 
-bool rmtree(string path) {
-	DIR *dirp;
-	struct stat st;
-	struct dirent *dptr;
-	string filepath;
-
-	DEBUG("RMTREE: '%s'\n", path.c_str());
-
-	if ((dirp = opendir(path.c_str())) == NULL) return false;
-	if (path[path.length()-1]!='/') path += "/";
-
-	while ((dptr = readdir(dirp))) {
-		filepath = dptr->d_name;
-		if (filepath=="." || filepath=="..") continue;
-		filepath = path+filepath;
-		int statRet = stat(filepath.c_str(), &st);
-		if (statRet == -1) continue;
-		if (S_ISDIR(st.st_mode)) {
-			if (!rmtree(filepath)) return false;
-		} else {
-			if (unlink(filepath.c_str())!=0) return false;
-		}
+string uniquePath(string const& dir, string const& name)
+{
+	string path = dir + "/" + name;
+	unsigned int x = 2;
+	while (fileExists(path)) {
+		stringstream ss;
+		ss << dir << '/' << name << x;
+		ss >> path;
+		x++;
 	}
-
-	closedir(dirp);
-	return rmdir(path.c_str())==0;
-}
-
-int constrain(int x, int imin, int imax) {
-	return min(imax, max(imin, x));
+	return path;
 }
 
 //Configuration parsing utilities
@@ -130,43 +191,27 @@ int evalIntConf (ConfIntHash& hash, const std::string &key, int def, int imin, i
 	if (it == hash.end()) {
 		return hash[key] = def;
 	} else {
-		return it->second = constrain(it->second, imin, imax);
+		return it->second = stdx::clamp(it->second, imin, imax);
 	}
 }
 
-bool split (vector<string> &vec, const string &str, const string &delim, bool destructive) {
+void split(vector<string>& vec, string const& str, string const& delim) {
 	vec.clear();
+
+	if (str.empty())
+		return;
 
 	if (delim.empty()) {
 		vec.push_back(str);
-		return false;
+		return;
 	}
 
-	std::string::size_type i = 0;
-	std::string::size_type j = 0;
-
-	while(1) {
-		j = str.find(delim,i);
-		if (j==std::string::npos) {
-			vec.push_back(str.substr(i));
-			break;
-		}
-
-		if (!destructive)
-			j += delim.size();
-
-		vec.push_back(str.substr(i,j-i));
-
-		if (destructive)
-			i = j + delim.size();
-
-		if (i==str.size()) {
-			vec.push_back(std::string());
-			break;
-		}
+	string::size_type i = 0, j;
+	while ((j = str.find(delim, i)) != string::npos) {
+		vec.push_back(str.substr(i, j - i));
+		i = j + delim.size();
 	}
-
-	return true;
+	vec.push_back(str.substr(i));
 }
 
 string strreplace (string orig, const string &search, const string &replace) {
@@ -180,7 +225,7 @@ string strreplace (string orig, const string &search, const string &replace) {
 
 string cmdclean (string cmdline) {
 	string spchars = "\\`$();|{}&'\"*?<>[]!^~-#\n\r ";
-	for (uint i=0; i<spchars.length(); i++) {
+	for (size_t i=0; i<spchars.length(); i++) {
 		string curchar = spchars.substr(i,1);
 		cmdline = strreplace(cmdline, curchar, "\\"+curchar);
 	}
@@ -189,18 +234,16 @@ string cmdclean (string cmdline) {
 
 int intTransition(int from, int to, long tickStart, long duration, long tickNow) {
 	if (tickNow<0) tickNow = SDL_GetTicks();
-	return constrain(((tickNow-tickStart) * (to-from)) / duration, from, to);
+	return stdx::clamp((int)(((tickNow-tickStart) * (to-from)) / duration), from, to);
 	//                    elapsed                 increments
 }
 
-void inject_user_event(enum EventCode code, void *data1, void *data2)
+void request_repaint()
 {
-	SDL_UserEvent e = {
-		.type = SDL_USEREVENT,
-		.code = code,
-		.data1 = data1,
-		.data2 = data2,
-	};
+	if (!PowerSaver::getInstance()->getScreenState())
+		return;
+
+	SDL_UserEvent e = { SDL_USEREVENT };
 
 	/* Inject an user event, that will be handled as a "repaint"
 	 * event by the InputManager */

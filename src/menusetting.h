@@ -32,7 +32,7 @@ Base class for different kind of option
 */
 class MenuSetting {
 protected:
-	GMenu2X *gmenu2x;
+	GMenu2X& gmenu2x;
 
 	ButtonBox buttonBox;
 
@@ -40,12 +40,11 @@ protected:
 
 public:
 	MenuSetting(
-			GMenu2X *gmenu2x, const std::string &name,
+			GMenu2X& gmenu2x, const std::string &name,
 			const std::string &description);
 	virtual ~MenuSetting();
 
 	virtual void draw(int valueX, int y, int h);
-	virtual void handleTS(int valueX, int y, int h);
 
 	virtual bool handleButtonPress(InputManager::Button button) = 0;
 	virtual void drawSelected(int valueX, int y, int h);

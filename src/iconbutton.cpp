@@ -8,16 +8,15 @@ using namespace std;
 
 
 IconButton::IconButton(
-		GMenu2X *gmenu2x, Touchscreen &ts,
-		const string &icon, const string &label, Action action)
+		GMenu2X& gmenu2x, const string &icon, const string &label,
+		Action action)
 	: gmenu2x(gmenu2x)
-	, ts(ts)
 	, icon(icon)
 	, label(label)
 	, action(action)
 	, rect({ 0, 0, 0, 0 })
 {
-	iconSurface = gmenu2x->sc[icon];
+	iconSurface = gmenu2x.sc[icon];
 	recalcRects();
 }
 
@@ -42,8 +41,8 @@ void IconButton::recalcRects() {
 		labelRect = {
 			static_cast<Sint16>(iconRect.x + iconRect.w + margin),
 			static_cast<Sint16>(rect.y + h / 2),
-			static_cast<Uint16>(gmenu2x->font->getTextWidth(label)),
-			static_cast<Uint16>(gmenu2x->font->getLineSpacing())
+			static_cast<Uint16>(gmenu2x.font->getTextWidth(label)),
+			static_cast<Uint16>(gmenu2x.font->getLineSpacing())
 		};
 		w += margin + labelRect.w;
 	}
@@ -52,21 +51,12 @@ void IconButton::recalcRects() {
 	rect.h = h;
 }
 
-bool IconButton::handleTS() {
-	if (action && ts.released() && ts.inRect(rect)) {
-		ts.setHandled();
-		action();
-		return true;
-	}
-	return false;
-}
-
 void IconButton::paint(Surface& s) {
 	if (iconSurface) {
 		iconSurface->blit(s, iconRect);
 	}
 	if (!label.empty()) {
-		gmenu2x->font->write(s, label, labelRect.x, labelRect.y,
+		gmenu2x.font->write(s, label, labelRect.x, labelRect.y,
 				Font::HAlignLeft, Font::VAlignMiddle);
 	}
 }

@@ -12,7 +12,6 @@
 class GMenu2X;
 class Menu;
 
-
 /**
  * A popup dialog containing action on the current section or link.
  */
@@ -24,7 +23,6 @@ public:
 	virtual bool runAnimations();
 	virtual void paint(Surface &s);
 	virtual bool handleButtonPress(InputManager::Button button);
-	virtual bool handleTouchscreen(Touchscreen &ts);
 
 private:
 	struct MenuOption;

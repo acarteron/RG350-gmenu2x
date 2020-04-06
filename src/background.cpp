@@ -8,21 +8,26 @@
 
 Background::Background(GMenu2X& gmenu2x)
 	: gmenu2x(gmenu2x)
-	, battery(gmenu2x.sc)
+	, battery(gmenu2x)
 {
 }
 
 void Background::paint(Surface& s) {
 	Font& font = *gmenu2x.font;
-	OffscreenSurface& bgmain = *gmenu2x.bgmain;
+	const auto& bgmain = gmenu2x.bgmain;
 
-	bgmain.blit(s, 0, 0);
+	bgmain->blit(s, 0, 0);
 
+#ifdef ENABLE_CLOCK
 	font.write(s, clock.getTime(),
 			s.width() / 2, gmenu2x.bottomBarTextY,
 			Font::HAlignCenter, Font::VAlignMiddle);
+#endif
 
-	battery.getIcon().blit(s, s.width() - 40, gmenu2x.bottomBarIconY);
+	auto icon = battery.getIcon();
+	if (icon) {
+		icon->blit(s, s.width() - 19, gmenu2x.bottomBarIconY);
+	}
 }
 
 bool Background::handleButtonPress(InputManager::Button button) {
@@ -36,8 +41,4 @@ bool Background::handleButtonPress(InputManager::Button button) {
 		default:
 			return false;
 	}
-}
-
-bool Background::handleTouchscreen(Touchscreen&) {
-	return false;
 }

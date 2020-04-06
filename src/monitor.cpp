@@ -1,6 +1,7 @@
 #ifdef ENABLE_INOTIFY
 #include "debug.h"
 
+#include <climits>
 #include <dirent.h>
 #include <pthread.h>
 #include <SDL.h>
@@ -9,15 +10,18 @@
 #include <unistd.h>
 
 #include "inputmanager.h"
+#include "menu.h"
 #include "monitor.h"
 #include "utilities.h"
 
 void Monitor::inject_event(bool is_add, const char *path)
 {
 	if (is_add)
-		inject_user_event(OPEN_PACKAGE, strdup(path));
+		menu->openPackage(path);
 	else
-		inject_user_event(REMOVE_LINKS, strdup(path));
+		menu->removePackageLink(path);
+
+	request_repaint();
 }
 
 bool Monitor::event_accepted(struct inotify_event &event)
@@ -29,19 +33,18 @@ bool Monitor::event_accepted(struct inotify_event &event)
 
 int Monitor::run()
 {
-	int wd, fd;
-
 	DEBUG("Starting inotify thread for path %s...\n", path.c_str());
 
-	fd = inotify_init1(IN_CLOEXEC);
+	int fd = inotify_init1(IN_CLOEXEC);
 	if (fd < 0) {
 		ERROR("Unable to start inotify\n");
 		return fd;
 	}
 
-	wd = inotify_add_watch(fd, path.c_str(), mask);
+	int wd = inotify_add_watch(fd, path.c_str(), mask);
 	if (wd < 0) {
-		ERROR("Unable to add inotify watch\n");
+		ERROR("Unable to add inotify watch on '%s': %s\n",
+				path.c_str(), strerror(errno));
 		close(fd);
 		return wd;
 	}
@@ -78,7 +81,8 @@ static void * inotify_thd(void *p)
 	return NULL;
 }
 
-Monitor::Monitor(std::string path, unsigned int flags) : path(path)
+Monitor::Monitor(std::string path, Menu *menu, unsigned int flags)
+	: path(path), menu(menu)
 {
 	mask = flags;
 	pthread_create(&thd, NULL, inotify_thd, (void *) this);

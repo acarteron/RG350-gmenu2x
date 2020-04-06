@@ -26,13 +26,15 @@
 #include <unordered_map>
 
 #include "inputmanager.h"
+#include "cpp_backports.h"
 
-typedef std::unordered_map<std::string, std::string, std::hash<std::string>> ConfStrHash;
-typedef std::unordered_map<std::string, int, std::hash<std::string>> ConfIntHash;
+using ConfStrHash = std::unordered_map<std::string, std::string>;
+using ConfIntHash = std::unordered_map<std::string, int>;
 
 class case_less {
 public:
 	bool operator()(const std::string &left, const std::string &right) const;
+	static std::string to_lower(std::string input);
 };
 
 inline bool isUTF8Starter(char c) {
@@ -47,7 +49,21 @@ std::string ltrim(const std::string& s);
 std::string rtrim(const std::string& s);
 
 /** Returns the contents of the given file as a string. */
-std::string readFileAsString(const char *filename);
+std::string readFileAsString(std::string const& filename);
+
+/**
+ * Writes the given string to a file.
+ * The update is done atomically but not durably; if you need durability
+ * when fsync() the parent directory afterwards.
+ * @return True iff the file was written successfully.
+ */
+bool writeStringToFile(std::string const& filename, std::string const& data);
+
+/**
+ * Tells the file system to commit the given directory to disk.
+ * @return True iff the sync was successful.
+ */
+bool syncDir(std::string const& dirname);
 
 std::string strreplace(std::string orig, const std::string &search, const std::string &replace);
 std::string cmdclean(std::string cmdline);
@@ -65,19 +81,30 @@ inline std::string trimExtension(std::string const& filename) {
 }
 
 bool fileExists(const std::string &file);
-bool rmtree(std::string path);
+
+/**
+ * Constructs a non-existing path in a given directory based on the given name.
+ */
+std::string uniquePath(std::string const& dir, std::string const& name);
 
 int constrain(int x, int imin, int imax);
 
 int evalIntConf(ConfIntHash& hash, const std::string &key, int def, int imin, int imax);
 
-bool split(std::vector<std::string> &vec, const std::string &str,
-		const std::string &delim, bool destructive=true);
+/**
+ * Splits the given string on the given delimiter, returning the split elements
+ * in the given vector.
+ * A delimiter can be a string of multiple characters, in which case that
+ * entire delimiter string acts as a single delimiter.
+ * If the delimiter is empty, the entire string is returned as a single element.
+ * Any previous contents of the vector are discarded.
+ */
+void split(std::vector<std::string>& vec, std::string const& str,
+		std::string const& delim);
 
 int intTransition(int from, int to, long int tickStart, long duration=500,
 		long tickNow=-1);
 
-void inject_user_event(enum EventCode code = REPAINT_MENU,
-			void *data1 = NULL, void *data2 = NULL);
+void request_repaint();
 
 #endif // UTILITIES_H

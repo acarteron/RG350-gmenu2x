@@ -30,20 +30,20 @@
 
 using namespace std;
 
-bool InputManager::init(GMenu2X *gmenu2x, Menu *menu) {
-	this->gmenu2x = gmenu2x;
+bool InputManager::init(Menu *menu)
+{
 	this->menu = menu;
 
 	repeatRateChanged();
 
-	for (int i = 0; i < BUTTON_TYPE_SIZE; i++) {
-		buttonMap[i].js_mapped = false;
-		buttonMap[i].kb_mapped = false;
+	for (auto& button : buttonMap) {
+		button.js_mapped = false;
+		button.kb_mapped = false;
 	}
 
 	/* If a user-specified input.conf file exists, we load it;
 	 * otherwise, we load the default one. */
-	string input_file = gmenu2x->getHome() + "/input.conf";
+	string input_file = gmenu2x.getHome() + "/input.conf";
 	DEBUG("Loading user-specific input.conf file: %s.\n", input_file.c_str());
 	if (!readConfFile(input_file)) {
 		input_file = GMENU2X_SYSTEM_DIR "/input.conf";
@@ -57,8 +57,8 @@ bool InputManager::init(GMenu2X *gmenu2x, Menu *menu) {
 	return true;
 }
 
-InputManager::InputManager(PowerSaver& powerSaver)
-	: powerSaver(powerSaver)
+InputManager::InputManager(GMenu2X& gmenu2x)
+	: gmenu2x(gmenu2x)
 {
 #ifndef SDL_JOYSTICK_DISABLED
 	int i;
@@ -95,7 +95,7 @@ bool InputManager::readConfFile(const string &conffile) {
 		while (getline(inf, line, '\n')) {
 			string::size_type pos = line.find("=");
 			string name = trim(line.substr(0,pos));
-			line = trim(line.substr(pos+1,line.length()));
+			line = trim(line.substr(pos+1));
 
 			Button button;
 			if (name == "up")            button = UP;
@@ -116,15 +116,15 @@ bool InputManager::readConfFile(const string &conffile) {
 
 			pos = line.find(",");
 			string sourceStr = trim(line.substr(0,pos));
-			line = trim(line.substr(pos+1, line.length()));
+			line = trim(line.substr(pos+1));
 
 			if (sourceStr == "keyboard") {
 				buttonMap[button].kb_mapped = true;
-				buttonMap[button].kb_code = atoi(line.c_str());
+				buttonMap[button].kb_code = std::stoi(line);
 	#ifndef SDL_JOYSTICK_DISABLED
 			} else if (sourceStr == "joystick") {
 				buttonMap[button].js_mapped = true;
-				buttonMap[button].js_code = atoi(line.c_str());
+				buttonMap[button].js_code = std::stoi(line);
 	#endif
 			} else {
 				WARNING("InputManager: Ignoring unknown button source \"%s\"\n",
@@ -152,7 +152,7 @@ static int repeatRateMs(int repeatRate)
 }
 
 void InputManager::repeatRateChanged() {
-	int ms = repeatRateMs(gmenu2x->confInt["buttonRepeatRate"]);
+	int ms = repeatRateMs(gmenu2x.confInt["buttonRepeatRate"]);
 	if (ms == 0) {
 		SDL_EnableKeyRepeat(0, 0);
 	} else {
@@ -250,28 +250,11 @@ bool InputManager::getButton(Button *button, bool wait) {
 			}
 #endif
 		case SDL_USEREVENT:
-			switch ((enum EventCode) event.user.code) {
-#ifdef HAVE_LIBOPK
-				case REMOVE_LINKS:
-					menu->removePackageLink((const char *) event.user.data1);
-					break;
-				case OPEN_PACKAGE:
-					menu->openPackage((const char *) event.user.data1);
-					break;
-				case OPEN_PACKAGES_FROM_DIR:
-					menu->openPackagesFromDir(
-								((string) (const char *) event.user.data1
-								 + "/apps").c_str());
-					break;
-#endif /* HAVE_LIBOPK */
-				case REPAINT_MENU:
-				default:
-					break;
-			}
-
-			if (event.user.data1)
-				free(event.user.data1);
 			*button = REPAINT;
+			return true;
+
+		case SDL_QUIT:
+			*button = QUIT;
 			return true;
 
 		default:
@@ -302,9 +285,8 @@ bool InputManager::getButton(Button *button, bool wait) {
 	if (i == BUTTON_TYPE_SIZE)
 		return false;
 
-	if (wait) {
-		powerSaver.resetScreenTimer();
-	}
+	if (wait)
+		PowerSaver::getInstance()->resetScreenTimer();
 
 	return true;
 }
@@ -324,7 +306,7 @@ void InputManager::startTimer(Joystick *joystick)
 				keyRepeatCallback, joystick);
 }
 
-Uint32 InputManager::joystickRepeatCallback(Uint32 timeout __attribute__((unused)), struct Joystick *joystick)
+Uint32 InputManager::joystickRepeatCallback([[maybe_unused]] Uint32 timeout, struct Joystick *joystick)
 {
 	Uint8 hatState;
 
@@ -340,14 +322,14 @@ Uint32 InputManager::joystickRepeatCallback(Uint32 timeout __attribute__((unused
 		hatState = joystick->hatState;
 
 	SDL_JoyHatEvent e = {
-		.type = SDL_JOYHATMOTION,
-		.which = (Uint8) SDL_JoystickIndex(joystick->joystick),
-		.hat = 0,
-		.value = hatState,
+		SDL_JOYHATMOTION,
+		(Uint8) SDL_JoystickIndex(joystick->joystick),
+		0,
+		hatState,
 	};
 	SDL_PushEvent((SDL_Event *) &e);
 
-	return repeatRateMs(gmenu2x->confInt["buttonRepeatRate"]);
+	return repeatRateMs(gmenu2x.confInt["buttonRepeatRate"]);
 }
 
 void InputManager::stopTimer(Joystick *joystick)

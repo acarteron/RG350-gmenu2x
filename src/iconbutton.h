@@ -10,29 +10,25 @@
 
 class OffscreenSurface;
 class Surface;
-class Touchscreen;
 
 
 class IconButton {
 public:
 	typedef std::function<void(void)> Action;
 
-	IconButton(GMenu2X *gmenu2x, Touchscreen &ts,
+	IconButton(GMenu2X& gmenu2x,
 			const std::string &icon, const std::string &label = "",
 			Action action = nullptr);
 
 	SDL_Rect getRect() { return rect; }
 	void setPosition(int x, int y);
 
-	bool handleTS();
-
 	void paint(Surface& s);
 
 private:
 	void recalcRects();
 
-	GMenu2X *gmenu2x;
-	Touchscreen &ts;
+	GMenu2X& gmenu2x;
 	std::string icon, label;
 	Action action;
 

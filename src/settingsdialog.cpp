@@ -28,14 +28,13 @@
 using namespace std;
 
 SettingsDialog::SettingsDialog(
-		GMenu2X *gmenu2x_, InputManager &inputMgr_, Touchscreen &ts_,
+		GMenu2X& gmenu2x, InputManager &inputMgr_,
 		const string &text_, const string &icon)
-	: Dialog(gmenu2x_)
+	: Dialog(gmenu2x)
 	, inputMgr(inputMgr_)
-	, ts(ts_)
 	, text(text_)
 {
-	if (!icon.empty() && gmenu2x->sc[icon] != NULL) {
+	if (!icon.empty() && gmenu2x.sc[icon] != NULL) {
 		this->icon = icon;
 	} else {
 		this->icon = "icons/generic.png";
@@ -43,81 +42,53 @@ SettingsDialog::SettingsDialog(
 }
 
 bool SettingsDialog::exec() {
-	OffscreenSurface bg(*gmenu2x->bg);
+	OffscreenSurface bg(*gmenu2x.bg);
 	bg.convertToDisplayFormat();
 
-	bool close = false, ts_pressed = false;
-	uint i, sel = 0, firstElement = 0;
+	bool close = false;
+	uint32_t i, sel = 0, firstElement = 0;
 
-	const int topBarHeight = gmenu2x->skinConfInt["topBarHeight"];
-	SDL_Rect clipRect = {
-		0,
-		static_cast<Sint16>(topBarHeight + 1),
-		static_cast<Uint16>(gmenu2x->resX - 9),
-		static_cast<Uint16>(gmenu2x->resY - topBarHeight - 25)
-	};
-	SDL_Rect touchRect = {
-		2,
-		static_cast<Sint16>(topBarHeight + 4),
-		static_cast<Uint16>(gmenu2x->resX - 12),
-		static_cast<Uint16>(clipRect.h)
-	};
-	uint rowHeight = gmenu2x->font->getLineSpacing() + 1; // gp2x=15+1 / pandora=19+1
-	uint numRows = (gmenu2x->resY - topBarHeight - 20) / rowHeight;
+	const int topBarHeight = gmenu2x.skinConfInt["topBarHeight"];
+	uint32_t rowHeight = gmenu2x.font->getLineSpacing() + 1; // gp2x=15+1 / pandora=19+1
+	uint32_t numRows = (gmenu2x.height() - topBarHeight - 20) / rowHeight;
 
-	uint maxNameWidth = 0;
+	uint32_t maxNameWidth = 0;
 	for (auto it = settings.begin(); it != settings.end(); it++) {
-		maxNameWidth = max(maxNameWidth, (uint) gmenu2x->font->getTextWidth((*it)->getName()));
+		maxNameWidth = std::max(maxNameWidth, (uint32_t) gmenu2x.font->getTextWidth((*it)->getName()));
 	}
 
 	while (!close) {
-		OutputSurface& s = *gmenu2x->s;
-
-		if (ts.available()) ts.poll();
+		OutputSurface& s = *gmenu2x.s;
 
 		bg.blit(s, 0, 0);
 
-		gmenu2x->drawTopBar(s);
+		gmenu2x.drawTopBar(s);
 		//link icon
 		drawTitleIcon(s, icon);
 		writeTitle(s, text);
 
-		gmenu2x->drawBottomBar(s);
+		gmenu2x.drawBottomBar(s);
 
 		if (sel>firstElement+numRows-1) firstElement=sel-numRows+1;
 		if (sel<firstElement) firstElement=sel;
 
 		//selection
-		uint iY = topBarHeight + 2 + (sel - firstElement) * rowHeight;
+		uint32_t iY = topBarHeight + 2 + (sel - firstElement) * rowHeight;
 
 		//selected option
 		settings[sel]->drawSelected(maxNameWidth + 15, iY, rowHeight);
 
-		if (ts_pressed && !ts.pressed()) {
-			ts_pressed = false;
-		}
-		if (ts.available() && ts.pressed() && !ts.inRect(touchRect)) {
-			ts_pressed = false;
-		}
 		for (i=firstElement; i<settings.size() && i<firstElement+numRows; i++) {
 			iY = i-firstElement;
 			settings[i]->draw(maxNameWidth + 15, iY * rowHeight + topBarHeight + 2, rowHeight);
-			if (ts.available() && ts.pressed() && ts.inRect(
-					touchRect.x, touchRect.y + (iY * rowHeight),
-					touchRect.w, rowHeight
-					)) {
-				ts_pressed = true;
-				sel = i;
-			}
 		}
 
-		gmenu2x->drawScrollBar(numRows, settings.size(), firstElement);
+		gmenu2x.drawScrollBar(numRows, settings.size(), firstElement);
 
 		//description
 		writeSubTitle(s, settings[sel]->getDescription());
 
 		s.flip();
-		settings[sel]->handleTS(maxNameWidth + 15, iY, rowHeight);
 
 		InputManager::Button button = inputMgr.waitForPressedButton();
 		if (!settings[sel]->handleButtonPress(button)) {

@@ -23,12 +23,13 @@
 
 #include <SDL.h>
 
+#include <memory>
 #include <functional>
 #include <string>
 
+class Font;
 class GMenu2X;
 class OffscreenSurface;
-class Touchscreen;
 
 
 /**
@@ -40,23 +41,21 @@ class Link {
 public:
 	typedef std::function<void(void)> Action;
 
-	Link(GMenu2X *gmenu2x, Action action);
+	Link(GMenu2X& gmenu2x, Action action);
 	virtual ~Link() {};
-
-	bool isPressed();
-	bool handleTS();
 
 	virtual void paint();
 	void paintHover();
+	void paintDescription(int center_x, int center_y);
 
 	virtual void loadIcon();
 
 	void setSize(int w, int h);
 	void setPosition(int x, int y);
 
-	const std::string &getTitle();
+	const std::string &getTitle() const;
 	void setTitle(const std::string &title);
-	const std::string &getDescription();
+	const std::string &getDescription() const;
 	void setDescription(const std::string &description);
 	const std::string &getLaunchMsg();
 	const std::string &getIcon();
@@ -66,11 +65,16 @@ public:
 	void run();
 
 protected:
-	GMenu2X *gmenu2x;
+	GMenu2X& gmenu2x;
 	bool edited;
-	std::string title, description, launchMsg, icon, iconPath;
+	std::string launchMsg, icon, iconPath;
 
 	OffscreenSurface *iconSurface;
+	std::unique_ptr<OffscreenSurface> textSurface;
+	std::unique_ptr<OffscreenSurface> descSurface;
+
+	// Font used for pre-rendered text and desc surfaces.
+	const Font *cachedFont = nullptr;
 
 	virtual const std::string &searchIcon();
 	void setIconPath(const std::string &icon);
@@ -79,12 +83,12 @@ protected:
 private:
 	void recalcCoordinates();
 
-	Touchscreen &ts;
 	Action action;
 
 	SDL_Rect rect;
-	uint iconX, padding;
+	uint32_t iconX, padding;
 	int lastTick;
+	std::string title, description;
 };
 
 #endif

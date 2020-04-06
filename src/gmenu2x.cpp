@@ -18,9 +18,9 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
-#include "gp2x.h"
-
 #include "background.h"
+#include "brightnessmanager.h"
+#include "buildopts.h"
 #include "cpu.h"
 #include "debug.h"
 #include "filedialog.h"
@@ -51,50 +51,24 @@
 
 #include <iostream>
 #include <sstream>
+#include <experimental/filesystem>
 #include <fstream>
 #include <algorithm>
+#include <system_error>
+
 #include <stdlib.h>
 #include <unistd.h>
 #include <math.h>
 #include <SDL.h>
 #include <signal.h>
 
-#include <sys/statvfs.h>
 #include <errno.h>
-
-#include <sys/fcntl.h> //for battery
-
-#ifdef PLATFORM_PANDORA
-//#include <pnd_container.h>
-//#include <pnd_conf.h>
-//#include <pnd_discovery.h>
-#endif
 
 //for browsing the filesystem
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <dirent.h>
-
-//for soundcard
-#include <sys/ioctl.h>
-#include <linux/soundcard.h>
-
-#include <sys/mman.h>
 
 using namespace std;
-
-#ifndef DEFAULT_WALLPAPER_PATH
-#define DEFAULT_WALLPAPER_PATH \
-  GMENU2X_SYSTEM_DIR "/skins/Default/wallpapers/default.png"
-#endif
-
-#ifdef _CARD_ROOT
-const char *CARD_ROOT = _CARD_ROOT;
-#elif defined(PLATFORM_A320) || defined(PLATFORM_GCW0)
-const char *CARD_ROOT = "/media";
-#else
-const char *CARD_ROOT = "/card";
-#endif
 
 static GMenu2X *app;
 static string gmenu2x_home;
@@ -107,6 +81,13 @@ static const char *colorNames[NUM_COLORS] = {
 	"messageBoxBg",
 	"messageBoxBorder",
 	"messageBoxSelection",
+};
+
+static const std::pair<unsigned int, unsigned int> supported_resolutions[] = {
+	{ 800, 480 },
+	{ 640, 480 },
+	{ 320, 240 },
+	{ 240, 160 },
 };
 
 static enum color stringToColor(const string &name)
@@ -140,6 +121,7 @@ static void set_handler(int signal, void (*handler)(int))
 	struct sigaction sig;
 	sigaction(signal, NULL, &sig);
 	sig.sa_handler = handler;
+	sig.sa_flags |= SA_RESTART;
 	sigaction(signal, &sig, NULL);
 }
 
@@ -156,9 +138,11 @@ int main(int /*argc*/, char * /*argv*/[]) {
 		return 1;
 	}
 
-	gmenu2x_home = (string)home + (string)"/.gmenu2x";
-	if (mkdir(gmenu2x_home.c_str(), 0770) < 0 && errno != EEXIST) {
-		ERROR("Unable to create gmenu2x home directory.\n");
+	gmenu2x_home = (string)home + "/.gmenu2x";
+
+	std::error_code ec;
+	if (!std::experimental::filesystem::create_directory(gmenu2x_home, ec) && ec.value()) {
+		ERROR("Unable to create gmenu2x home directory: %d\n", ec.value());
 		return 1;
 	}
 
@@ -191,45 +175,12 @@ void GMenu2X::run() {
 	}
 }
 
-#ifdef ENABLE_CPUFREQ
-void GMenu2X::initCPULimits() {
-	// Note: These values are for the Dingoo.
-	//       The NanoNote does not have cpufreq enabled in its kernel and
-	//       other devices are not actively maintained.
-	// TODO: Read min and max from sysfs.
-	cpuFreqMin = 30;
-	cpuFreqMax = 500;
-	cpuFreqSafeMax = 420;
-	cpuFreqMenuDefault = 200;
-	cpuFreqAppDefault = 384;
-	cpuFreqMultiple = 24;
-
-	// Round min and max values to the specified multiple.
-	cpuFreqMin = ((cpuFreqMin + cpuFreqMultiple - 1) / cpuFreqMultiple)
-			* cpuFreqMultiple;
-	cpuFreqMax = (cpuFreqMax / cpuFreqMultiple) * cpuFreqMultiple;
-	cpuFreqSafeMax = (cpuFreqSafeMax / cpuFreqMultiple) * cpuFreqMultiple;
-	cpuFreqMenuDefault = (cpuFreqMenuDefault / cpuFreqMultiple) * cpuFreqMultiple;
-	cpuFreqAppDefault = (cpuFreqAppDefault / cpuFreqMultiple) * cpuFreqMultiple;
-}
-#endif
-
-GMenu2X::GMenu2X()
-	: input(powerSaver)
+GMenu2X::GMenu2X() : input(*this), sc(this)
 {
 	usbnet = samba = inet = web = false;
 	useSelectionPng = false;
 
-#ifdef ENABLE_CPUFREQ
-	initCPULimits();
-#endif
-	//load config data
-	readConfig();
-
-	halfX = resX/2;
-	halfY = resY/2;
-	bottomBarIconY = resY-36;
-	bottomBarTextY = resY-20;
+	powerSaver = PowerSaver::getInstance();
 
 	/* Do not clear the screen on exit.
 	 * This may require an SDL patch available at
@@ -245,11 +196,6 @@ GMenu2X::GMenu2X()
 		exit(EXIT_FAILURE);
 	}
 
-	bg = NULL;
-	font = NULL;
-	setSkin(confStr["skin"], !fileExists(confStr["wallpaper"]));
-	layers.insert(layers.begin(), make_shared<Background>(*this));
-
 	/* We enable video at a later stage, so that the menu elements are
 	 * loaded before SDL inits the video; this is made so that we won't show
 	 * a black screen for a couple of seconds. */
@@ -260,12 +206,43 @@ GMenu2X::GMenu2X()
 		exit(EXIT_FAILURE);
 	}
 
-	s = OutputSurface::open(resX, resY, confInt["videoBpp"]);
+	SDL_WM_SetCaption("GMenu2X", nullptr);
+
+#if defined(G2X_BUILD_OPTION_SCREEN_WIDTH) && defined(G2X_BUILD_OPTION_SCREEN_HEIGHT)
+	s = OutputSurface::open(G2X_BUILD_OPTION_SCREEN_WIDTH, G2X_BUILD_OPTION_SCREEN_HEIGHT, 32);
+#else
+	// find largest resolution available
+	for (const auto res : supported_resolutions)
+		if (s = OutputSurface::open(res.first, res.second, 0))
+			break;
+#endif
+
+	if (!s) {
+		ERROR("Failed to create main window\n");
+		exit(EXIT_FAILURE);
+	};
+
+	DEBUG("%ux%u main window created\n", width(), height());
+
+	//load config data
+	readConfig();
+
+	brightnessmanager = std::make_unique<BrightnessManager>(this);
+	confInt["brightnessLevel"] = brightnessmanager->currentBrightness();
+
+	bottomBarIconY = height() - 18;
+	bottomBarTextY = height() - 10;
 
 	if (!fileExists(confStr["wallpaper"])) {
 		DEBUG("No wallpaper defined; we will take the default one.\n");
-		confStr["wallpaper"] = DEFAULT_WALLPAPER_PATH;
+		confStr["wallpaper"] = getSystemSkinPath("Default")
+				     + "/wallpapers/default.png";
 	}
+
+	bg = NULL;
+	font = NULL;
+	setSkin(confStr["skin"], !fileExists(confStr["wallpaper"]));
+	layers.insert(layers.begin(), make_shared<Background>(*this));
 
 	initBG();
 
@@ -277,18 +254,14 @@ GMenu2X::GMenu2X()
 	initMenu();
 
 #ifdef ENABLE_INOTIFY
-	monitor = new MediaMonitor(CARD_ROOT);
+	monitor = new MediaMonitor(GMENU2X_CARD_ROOT, menu.get());
 #endif
 
-	if (!input.init(this, menu.get())) {
+	if (!input.init(menu.get())) {
 		exit(EXIT_FAILURE);
 	}
 
-	powerSaver.setScreenTimeout(confInt["backlightTimeout"]);
-
-#ifdef ENABLE_CPUFREQ
-	setClock(confInt["menuClock"]);
-#endif
+	powerSaver->setScreenTimeout(confInt["backlightTimeout"]);
 }
 
 GMenu2X::~GMenu2X() {
@@ -307,7 +280,7 @@ void GMenu2X::initBG() {
 	// Load wallpaper.
 	bg = OffscreenSurface::loadImage(confStr["wallpaper"]);
 	if (!bg) {
-		bg = OffscreenSurface::emptySurface(resX, resY);
+		bg = OffscreenSurface::emptySurface(width(), height());
 	}
 
 	drawTopBar(*bg);
@@ -321,14 +294,14 @@ void GMenu2X::initBG() {
 		if (sd) sd->blit(*bgmain, 3, bottomBarIconY);
 	}
 
-	cpuX = 64 + font->write(*bgmain, getDiskFree(getHome().c_str()),
+	cpuX = 32 + font->write(*bgmain, getDiskFree(getHome().c_str()),
 			22, bottomBarTextY, Font::HAlignLeft, Font::VAlignMiddle);
 
 #ifdef ENABLE_CPUFREQ
 	{
-		auto cpu = OffscreenSurface::loadImage(
+		auto cpu_img = OffscreenSurface::loadImage(
 				sc.getSkinFilePath("imgs/cpu.png"));
-		if (cpu) cpu->blit(*bgmain, cpuX, bottomBarIconY);
+		if (cpu_img) cpu_img->blit(*bgmain, cpuX, bottomBarIconY);
 	}
 	cpuX += 19;
 	manualX = cpuX + font->getTextWidth("300MHz") + 5;
@@ -336,7 +309,7 @@ void GMenu2X::initBG() {
 	manualX = cpuX;
 #endif
 
-	int serviceX = resX-38;
+	int serviceX = width() - 38;
 	if (usbnet) {
 		if (web) {
 			auto webserver = OffscreenSurface::loadImage(
@@ -357,6 +330,7 @@ void GMenu2X::initBG() {
 			serviceX -= 19;
 		}
 	}
+	(void)serviceX;
 
 	bgmain->convertToDisplayFormat();
 }
@@ -368,7 +342,7 @@ void GMenu2X::initFont() {
 		if (!size)
 			size = 12;
 		if (path.substr(0,5)=="skin:")
-			path = sc.getSkinFilePath(path.substr(5, path.length()));
+			path = sc.getSkinFilePath(path.substr(5));
 		font.reset(new Font(path, size));
 	} else {
 		font = Font::defaultFont();
@@ -377,42 +351,39 @@ void GMenu2X::initFont() {
 
 void GMenu2X::initMenu() {
 	//Menu structure handler
-	menu.reset(new Menu(this, ts));
-	for (uint i=0; i<menu->getSections().size(); i++) {
-		//Add virtual links in the applications section
-		if (menu->getSections()[i]=="applications") {
-			menu->addActionLink(i, "Explorer",
-					bind(&GMenu2X::explorer, this),
-					tr["Launch an application"],
-					"skin:icons/explorer.png");
-		}
+	menu.reset(new Menu(*this));
 
-		//Add virtual links in the setting section
-		else if (menu->getSections()[i]=="settings") {
-			menu->addActionLink(i, "GMenu2X",
-					bind(&GMenu2X::showSettings, this),
-					tr["Configure GMenu2X's options"],
-					"skin:icons/configure.png");
-			menu->addActionLink(i, tr["Skin"],
-					bind(&GMenu2X::skinMenu, this),
-					tr["Configure skin"],
-					"skin:icons/skin.png");
-			menu->addActionLink(i, tr["Wallpaper"],
-					bind(&GMenu2X::changeWallpaper, this),
-					tr["Change GMenu2X wallpaper"],
-					"skin:icons/wallpaper.png");
-			if (fileExists(LOG_FILE)) {
-				menu->addActionLink(i, tr["Log Viewer"],
-						bind(&GMenu2X::viewLog, this),
-						tr["Displays last launched program's output"],
-						"skin:icons/ebook.png");
-			}
-			menu->addActionLink(i, tr["About"],
-					bind(&GMenu2X::about, this),
-					tr["Info about GMenu2X"],
-					"skin:icons/about.png");
-		}
+	// Add action links in the applications section.
+	auto appIdx = menu->sectionNamed("applications");
+	menu->addActionLink(appIdx, "Explorer",
+			bind(&GMenu2X::explorer, this),
+			tr["Launch an application"],
+			"skin:icons/explorer.png");
+
+	// Add action links in the settings section.
+	auto settingIdx = menu->sectionNamed("settings");
+	menu->addActionLink(settingIdx, "GMenu2X",
+			bind(&GMenu2X::showSettings, this),
+			tr["Configure GMenu2X's options"],
+			"skin:icons/configure.png");
+	menu->addActionLink(settingIdx, tr["Skin"],
+			bind(&GMenu2X::skinMenu, this),
+			tr["Configure skin"],
+			"skin:icons/skin.png");
+	menu->addActionLink(settingIdx, tr["Wallpaper"],
+			bind(&GMenu2X::changeWallpaper, this),
+			tr["Change GMenu2X wallpaper"],
+			"skin:icons/wallpaper.png");
+	if (fileExists(LOG_FILE)) {
+		menu->addActionLink(settingIdx, tr["Log Viewer"],
+				bind(&GMenu2X::viewLog, this),
+				tr["Displays last launched program's output"],
+				"skin:icons/ebook.png");
 	}
+	menu->addActionLink(settingIdx, tr["About"],
+			bind(&GMenu2X::about, this),
+			tr["Info about GMenu2X"],
+			"skin:icons/about.png");
 
 	menu->skinUpdated();
 	menu->orderLinks();
@@ -426,19 +397,19 @@ void GMenu2X::initMenu() {
 void GMenu2X::about() {
 	string text(readFileAsString(GMENU2X_SYSTEM_DIR "/about.txt"));
 	string build_date("Build date: " __DATE__);
-	TextDialog td(this, "GMenu2X", build_date, "icons/about.png", text);
+	TextDialog td(*this, "GMenu2X", build_date, "icons/about.png", text);
 	td.exec();
 }
 
 void GMenu2X::viewLog() {
 	string text(readFileAsString(LOG_FILE));
 
-	TextDialog td(this, tr["Log Viewer"],
+	TextDialog td(*this, tr["Log Viewer"],
 			tr["Displays last launched program's output"],
 			"icons/ebook.png", text);
 	td.exec();
 
-	MessageBox mb(this, tr["Do you want to delete the log file?"],
+	MessageBox mb(*this, tr["Do you want to delete the log file?"],
 			 "icons/ebook.png");
 	mb.setButton(InputManager::ACCEPT, tr["Yes"]);
 	mb.setButton(InputManager::CANCEL, tr["No"]);
@@ -463,7 +434,7 @@ void GMenu2X::readConfig(string conffile) {
 		while (getline(inf, line, '\n')) {
 			string::size_type pos = line.find("=");
 			string name = trim(line.substr(0,pos));
-			string value = trim(line.substr(pos+1,line.length()));
+			string value = trim(line.substr(pos+1));
 
 			if (value.length()>1 && value.at(0)=='"' && value.at(value.length()-1)=='"')
 				confStr[name] = value.substr(1,value.length()-2);
@@ -479,23 +450,15 @@ void GMenu2X::readConfig(string conffile) {
 	if (!confStr["wallpaper"].empty() && !fileExists(confStr["wallpaper"]))
 		confStr["wallpaper"] = "";
 
-	if (confStr["skin"].empty() || SurfaceCollection::getSkinPath(confStr["skin"]).empty())
+	if (confStr["skin"].empty() || sc.getSkinPath(confStr["skin"]).empty())
 		confStr["skin"] = "Default";
 
 	evalIntConf( confInt, "outputLogs", 0, 0,1 );
-#ifdef ENABLE_CPUFREQ
-	evalIntConf( confInt, "maxClock",
-				 cpuFreqSafeMax, cpuFreqMin, cpuFreqMax );
-	evalIntConf( confInt, "menuClock",
-				 cpuFreqMenuDefault, cpuFreqMin, cpuFreqSafeMax );
-#endif
 	evalIntConf( confInt, "backlightTimeout", 15, 0,120 );
 	evalIntConf( confInt, "buttonRepeatRate", 10, 0, 20 );
 	evalIntConf( confInt, "videoBpp", 32, 16, 32 );
 
 	if (confStr["tvoutEncoding"] != "PAL") confStr["tvoutEncoding"] = "NTSC";
-	resX = constrain( confInt["resolutionX"], 640,1920 );
-	resY = constrain( confInt["resolutionY"], 480,1200 );
 }
 
 void GMenu2X::saveSelection() {
@@ -524,17 +487,10 @@ void GMenu2X::writeConfig() {
 }
 
 void GMenu2X::writeSkinConfig() {
-	string conffile = getHome() + "/skins/";
-	if (mkdir(conffile.c_str(), 0770) < 0 && errno != EEXIST) {
-		ERROR("Failed to create directory %s to write skin configuration: %s\n", conffile.c_str(), strerror(errno));
-		return;
-	}
-	conffile = conffile + confStr["skin"];
-	if (mkdir(conffile.c_str(), 0770) < 0 && errno != EEXIST) {
-		ERROR("Failed to create directory %s to write skin configuration: %s\n", conffile.c_str(), strerror(errno));
-		return;
-	}
-	conffile = conffile + "/skin.conf";
+	string skin_dir = getLocalSkinPath(confStr["skin"]);
+
+	std::experimental::filesystem::create_directories(skin_dir);
+	string conffile = skin_dir + "/skin.conf";
 
 	ofstream inf(conffile.c_str());
 	if (inf.is_open()) {
@@ -565,7 +521,7 @@ void GMenu2X::readTmp() {
 		while (getline(inf, line, '\n')) {
 			string::size_type pos = line.find("=");
 			string name = trim(line.substr(0,pos));
-			string value = trim(line.substr(pos+1,line.length()));
+			string value = trim(line.substr(pos+1));
 
 			if (name=="section")
 				menu->setSectionIndex(atoi(value.c_str()));
@@ -595,9 +551,6 @@ void GMenu2X::writeTmp(int selelem, const string &selectordir) {
 }
 
 void GMenu2X::mainLoop() {
-	if (!fileExists(CARD_ROOT))
-		CARD_ROOT = "";
-
 	// Recover last session
 	readTmp();
 	if (lastSelectorElement > -1 && menu->selLinkApp() &&
@@ -632,16 +585,6 @@ void GMenu2X::mainLoop() {
 			break;
 		}
 
-		// Handle touchscreen events.
-		if (ts.available()) {
-			ts.poll();
-			for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
-				if ((*it)->handleTouchscreen(ts)) {
-					break;
-				}
-			}
-		}
-
 		// Handle other input events.
 		InputManager::Button button;
 		bool gotEvent;
@@ -650,6 +593,9 @@ void GMenu2X::mainLoop() {
 			gotEvent = input.getButton(&button, wait);
 		} while (wait && !gotEvent);
 		if (gotEvent) {
+			if (button == InputManager::QUIT) {
+				break;
+			}
 			for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
 				if ((*it)->handleButtonPress(button)) {
 					break;
@@ -660,16 +606,13 @@ void GMenu2X::mainLoop() {
 }
 
 void GMenu2X::explorer() {
-	FileDialog fd(this, ts, tr["Select an application"], "sh,bin,py,elf,");
+	FileDialog fd(*this, tr["Select an application"], "sh,bin,py,elf,");
 	if (fd.exec()) {
 		if (confInt["saveSelection"] && (confInt["section"]!=menu->selSectionIndex() || confInt["link"]!=menu->selLinkIndex()))
 			writeConfig();
 
 		string command = cmdclean(fd.getPath()+"/"+fd.getFile());
 		chdir(fd.getPath().c_str());
-#ifdef ENABLE_CPUFREQ
-		setClock(cpuFreqAppDefault);
-#endif
 
 		toLaunch.reset(new Launcher(
 				vector<string> { "/bin/sh", "-c", command }));
@@ -688,10 +631,6 @@ void GMenu2X::showHelpPopup() {
 }
 
 void GMenu2X::showSettings() {
-#ifdef ENABLE_CPUFREQ
-	int curMenuClock = confInt["menuClock"];
-#endif
-
 	FileLister fl_tr;
 	fl_tr.setShowDirectories(false);
 	fl_tr.browse(GMENU2X_SYSTEM_DIR "/translations");
@@ -705,46 +644,41 @@ void GMenu2X::showSettings() {
 	encodings.push_back("NTSC");
 	encodings.push_back("PAL");
 
-	SettingsDialog sd(this, input, ts, tr["Settings"]);
+	SettingsDialog sd(*this, input, tr["Settings"]);
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingMultiString(
-			this, ts, tr["Language"],
+			*this, tr["Language"],
 			tr["Set the language used by GMenu2X"],
 			&lang, &translations)));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingBool(
-			this, ts, tr["Save last selection"],
+			*this, tr["Save last selection"],
 			tr["Save the last selected link and section on exit"],
 			&confInt["saveSelection"])));
-#ifdef ENABLE_CPUFREQ
-	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingInt(
-			this, ts, tr["Clock for GMenu2X"],
-			tr["Set the cpu working frequency when running GMenu2X"],
-			&confInt["menuClock"], cpuFreqMin, cpuFreqSafeMax, cpuFreqMultiple)));
-	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingInt(
-			this, ts, tr["Maximum overclock"],
-			tr["Set the maximum overclock for launching links"],
-			&confInt["maxClock"], cpuFreqMin, cpuFreqMax, cpuFreqMultiple)));
-#endif
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingBool(
-			this, ts, tr["Output logs"],
+			*this, tr["Output logs"],
 			tr["Logs the output of the links. Use the Log Viewer to read them."],
 			&confInt["outputLogs"])));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingInt(
-			this, ts, tr["Screen Timeout"],
+			*this, tr["Screen Timeout"],
 			tr["Set screen's backlight timeout in seconds"],
 			&confInt["backlightTimeout"], 0, 120)));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingInt(
-			this, ts, tr["Button repeat rate"],
+			*this, tr["Button repeat rate"],
 			tr["Set button repetitions per second"],
 			&confInt["buttonRepeatRate"], 0, 20)));
+	if (brightnessmanager->available()) {
+		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingInt(
+				*this, tr["Brightness level"],
+				tr["Set the brightness level"],
+				&confInt["brightnessLevel"],
+				1, brightnessmanager->maxBrightness())));
+	}
 
 	if (sd.exec()) {
-#ifdef ENABLE_CPUFREQ
-		if (curMenuClock != confInt["menuClock"]) setClock(confInt["menuClock"]);
-#endif
-
-		powerSaver.setScreenTimeout(confInt["backlightTimeout"]);
+		powerSaver->setScreenTimeout(confInt["backlightTimeout"]);
 
 		input.repeatRateChanged();
+		if (brightnessmanager->available())
+			brightnessmanager->setBrightness(confInt["brightnessLevel"]);
 
 		if (lang == "English") lang = "";
 		if (lang != tr.lang()) {
@@ -760,38 +694,38 @@ void GMenu2X::skinMenu() {
 	FileLister fl_sk;
 	fl_sk.setShowFiles(false);
 	fl_sk.setShowUpdir(false);
-	fl_sk.browse(getHome() + "/skins");
-	fl_sk.browse(GMENU2X_SYSTEM_DIR "/skins", false);
+	fl_sk.browse(getLocalSkinTopPath());
+	fl_sk.browse(getSystemSkinTopPath(), false);
 
 	string curSkin = confStr["skin"];
 
-	SettingsDialog sd(this, input, ts, tr["Skin"]);
+	SettingsDialog sd(*this, input, tr["Skin"]);
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingMultiString(
-			this, ts, tr["Skin"],
+			*this, tr["Skin"],
 			tr["Set the skin used by GMenu2X"],
 			&confStr["skin"], &fl_sk.getDirectories())));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingRGBA(
-			this, ts, tr["Top Bar"],
+			*this, tr["Top Bar"],
 			tr["Color of the top bar"],
 			&skinConfColors[COLOR_TOP_BAR_BG])));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingRGBA(
-			this, ts, tr["Bottom Bar"],
+			*this, tr["Bottom Bar"],
 			tr["Color of the bottom bar"],
 			&skinConfColors[COLOR_BOTTOM_BAR_BG])));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingRGBA(
-			this, ts, tr["Selection"],
+			*this, tr["Selection"],
 			tr["Color of the selection and other interface details"],
 			&skinConfColors[COLOR_SELECTION_BG])));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingRGBA(
-			this, ts, tr["Message Box"],
+			*this, tr["Message Box"],
 			tr["Background color of the message box"],
 			&skinConfColors[COLOR_MESSAGE_BOX_BG])));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingRGBA(
-			this, ts, tr["Message Box Border"],
+			*this, tr["Message Box Border"],
 			tr["Border color of the message box"],
 			&skinConfColors[COLOR_MESSAGE_BOX_BORDER])));
 	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingRGBA(
-			this, ts, tr["Message Box Selection"],
+			*this, tr["Message Box Selection"],
 			tr["Color of the selection of the message box"],
 			&skinConfColors[COLOR_MESSAGE_BOX_SELECTION])));
 
@@ -828,9 +762,8 @@ void GMenu2X::setSkin(const string &skin, bool setWallpaper) {
 
 	/* Load skin settings from user directory if present,
 	 * or from the system directory. */
-	if (!readSkinConfig(getHome() + "/skins/" + skin + "/skin.conf")) {
-		readSkinConfig(GMENU2X_SYSTEM_DIR "/skins/" + skin + "/skin.conf");
-	}
+	if (!readSkinConfig(getLocalSkinPath(skin) + "/skin.conf"))
+		readSkinConfig(getSystemSkinPath(skin) + "/skin.conf");
 
 	if (setWallpaper && !skinConfStr["wallpaper"].empty()) {
 		string fp = sc.getSkinFilePath("wallpapers/" + skinConfStr["wallpaper"]);
@@ -848,7 +781,8 @@ void GMenu2X::setSkin(const string &skin, bool setWallpaper) {
 	if (menu != NULL) menu->skinUpdated();
 
 	//Selection png
-	useSelectionPng = sc.addSkinRes("imgs/selection.png", false) != NULL;
+	if (!skinConfInt["selectionBgUseColor"])
+		useSelectionPng = !!sc.addSkinRes("imgs/selection.png", false);
 
 	//font
 	initFont();
@@ -864,14 +798,14 @@ bool GMenu2X::readSkinConfig(const string& conffile)
 			DEBUG("skinconf: '%s'\n", line.c_str());
 			string::size_type pos = line.find("=");
 			string name = trim(line.substr(0,pos));
-			string value = trim(line.substr(pos+1,line.length()));
+			string value = trim(line.substr(pos+1));
 
 			if (value.length()>0) {
 				if (value.length()>1 && value.at(0)=='"' && value.at(value.length()-1)=='"')
 					skinConfStr[name] = value.substr(1,value.length()-2);
 				else if (value.at(0) == '#')
 					skinConfColors[stringToColor(name)] =
-						RGBAColor::fromString(value.substr(1, value.length()));
+						RGBAColor::fromString(value.substr(1));
 				else
 					skinConfInt[name] = atoi(value.c_str());
 			}
@@ -892,7 +826,7 @@ void GMenu2X::showContextMenu() {
 }
 
 void GMenu2X::changeWallpaper() {
-	WallpaperDialog wp(this, ts);
+	WallpaperDialog wp(*this);
 	if (wp.exec() && confStr["wallpaper"] != wp.wallpaper) {
 		confStr["wallpaper"] = wp.wallpaper;
 		initBG();
@@ -901,7 +835,7 @@ void GMenu2X::changeWallpaper() {
 }
 
 void GMenu2X::addLink() {
-	FileDialog fd(this, ts, tr["Select an application"], "sh,bin,py,elf,");
+	FileDialog fd(*this, tr["Select an application"], "sh,bin,py,elf,");
 	if (fd.exec())
 		menu->addLink(fd.getPath(), fd.getFile());
 }
@@ -910,11 +844,7 @@ void GMenu2X::editLink() {
 	LinkApp *linkApp = menu->selLinkApp();
 	if (!linkApp) return;
 
-	vector<string> pathV;
-	split(pathV,linkApp->getFile(),"/");
-	string oldSection = "";
-	if (pathV.size()>1)
-		oldSection = pathV[pathV.size()-2];
+	string oldSection = menu->selSection();
 	string newSection = oldSection;
 
 	string linkTitle = linkApp->getTitle();
@@ -924,57 +854,61 @@ void GMenu2X::editLink() {
 	string linkSelFilter = linkApp->getSelectorFilter();
 	string linkSelDir = linkApp->getSelectorDir();
 	bool linkSelBrowser = linkApp->getSelectorBrowser();
-	int linkClock = linkApp->clock();
 
 	string diagTitle = tr.translate("Edit $1",linkTitle.c_str(),NULL);
 	string diagIcon = linkApp->getIconPath();
 
-	SettingsDialog sd(this, input, ts, diagTitle, diagIcon);
+	SettingsDialog sd(*this, input, diagTitle, diagIcon);
 	if (!linkApp->isOpk()) {
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingString(
-				this, ts, tr["Title"],
+				*this, tr["Title"],
 				tr["Link title"],
 				&linkTitle, diagTitle, diagIcon)));
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingString(
-				this, ts, tr["Description"],
+				*this, tr["Description"],
 				tr["Link description"],
 				&linkDescription, diagTitle, diagIcon)));
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingMultiString(
-				this, ts, tr["Section"],
+				*this, tr["Section"],
 				tr["The section this link belongs to"],
 				&newSection, &menu->getSections())));
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingImage(
-				this, ts, tr["Icon"],
+				*this, tr["Icon"],
 				tr.translate("Select an icon for this link", linkTitle.c_str(), NULL),
 				&linkIcon, "png")));
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingFile(
-				this, ts, tr["Manual"],
+				*this, tr["Manual"],
 				tr["Select a manual or README file"],
 				&linkManual, "man.png,txt")));
 	}
 	if (!linkApp->isOpk() || !linkApp->getSelectorDir().empty()) {
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingDir(
-				this, ts, tr["Selector Directory"],
+				*this, tr["Selector Directory"],
 				tr["Directory to scan for the selector"],
 				&linkSelDir)));
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingBool(
-				this, ts, tr["Selector Browser"],
+				*this, tr["Selector Browser"],
 				tr["Allow the selector to change directory"],
 				&linkSelBrowser)));
 	}
 #ifdef ENABLE_CPUFREQ
-	sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingInt(
-			this, ts, tr["Clock frequency"],
-			tr["CPU clock frequency for this link"],
-			&linkClock, cpuFreqMin, confInt["maxClock"], cpuFreqMultiple)));
+	vector<string> cpufreqs = cpu.getFrequencies();
+	string freq = cpu.freqStr(linkApp->clock());
+
+	if (!cpufreqs.empty()) {
+		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingMultiString(
+				*this, tr["Clock frequency"],
+				tr["CPU clock frequency for this link"],
+				&freq, &cpufreqs)));
+	}
 #endif
 	if (!linkApp->isOpk()) {
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingString(
-				this, ts, tr["Selector Filter"],
+				*this, tr["Selector Filter"],
 				tr["Selector filter (Separate values with a comma)"],
 				&linkSelFilter, diagTitle, diagIcon)));
 		sd.addSetting(unique_ptr<MenuSetting>(new MenuSettingBool(
-				this, ts, tr["Display Console"],
+				*this, tr["Display Console"],
 				tr["Must be enabled for console-based applications"],
 				&linkApp->consoleApp)));
 	}
@@ -987,36 +921,22 @@ void GMenu2X::editLink() {
 		linkApp->setSelectorFilter(linkSelFilter);
 		linkApp->setSelectorDir(linkSelDir);
 		linkApp->setSelectorBrowser(linkSelBrowser);
-		linkApp->setClock(linkClock);
-
-		INFO("New Section: '%s'\n", newSection.c_str());
-
-		//if section changed move file and update link->file
-		if (oldSection!=newSection) {
-			vector<string>::const_iterator newSectionIndex = find(menu->getSections().begin(),menu->getSections().end(),newSection);
-			if (newSectionIndex==menu->getSections().end()) return;
-			string newFileName = "sections/"+newSection+"/"+linkTitle;
-			uint x=2;
-			while (fileExists(newFileName)) {
-				string id = "";
-				stringstream ss; ss << x; ss >> id;
-				newFileName = "sections/"+newSection+"/"+linkTitle+id;
-				x++;
-			}
-			rename(linkApp->getFile().c_str(),newFileName.c_str());
-			linkApp->renameFile(newFileName);
-
-			INFO("New section index: %i.\n", newSectionIndex - menu->getSections().begin());
-
-			menu->linkChangeSection(menu->selLinkIndex(), menu->selSectionIndex(), newSectionIndex - menu->getSections().begin());
-		}
+#ifdef ENABLE_CPUFREQ
+		linkApp->setClock(cpu.freqFromStr(freq));
+#endif
 		linkApp->save();
+
+		if (oldSection != newSection) {
+			INFO("Changed section: '%s' -> '%s'\n",
+					oldSection.c_str(), newSection.c_str());
+			menu->moveSelectedLink(newSection);
+		}
 	}
 }
 
 void GMenu2X::deleteLink() {
 	if (menu->selLinkApp()!=NULL) {
-		MessageBox mb(this, tr.translate("Deleting $1",menu->selLink()->getTitle().c_str(),NULL)+"\n"+tr["Are you sure?"], menu->selLink()->getIconPath());
+		MessageBox mb(*this, tr.translate("Deleting $1",menu->selLink()->getTitle().c_str(),NULL)+"\n"+tr["Are you sure?"], menu->selLink()->getIconPath());
 		mb.setButton(InputManager::ACCEPT, tr["Yes"]);
 		mb.setButton(InputManager::CANCEL, tr["No"]);
 		if (mb.exec() == InputManager::ACCEPT)
@@ -1025,86 +945,31 @@ void GMenu2X::deleteLink() {
 }
 
 void GMenu2X::addSection() {
-	InputDialog id(this, input, ts, tr["Insert a name for the new section"]);
+	InputDialog id(*this, input, tr["Insert a name for the new section"]);
 	if (id.exec()) {
-		//only if a section with the same name does not exist
-		if (find(menu->getSections().begin(), menu->getSections().end(), id.getInput())
-				== menu->getSections().end()) {
-			//section directory doesn't exists
-			if (menu->addSection(id.getInput()))
-				menu->setSectionIndex( menu->getSections().size()-1 ); //switch to the new section
-		}
+		// Look up section; create if it doesn't exist yet.
+		auto idx = menu->sectionNamed(id.getInput());
+		// Switch to the new section.
+		menu->setSectionIndex(idx);
 	}
 }
 
-void GMenu2X::renameSection() {
-	InputDialog id(this, input, ts, tr["Insert a new name for this section"],menu->selSection());
-	if (id.exec()) {
-		//only if a section with the same name does not exist & !samename
-		if (menu->selSection() != id.getInput()
-		 && find(menu->getSections().begin(),menu->getSections().end(), id.getInput())
-				== menu->getSections().end()) {
-			//section directory doesn't exists
-			string newsectiondir = getHome() + "/sections/" + id.getInput();
-			string sectiondir = getHome() + "/sections/" + menu->selSection();
-
-			if (!rename(sectiondir.c_str(), newsectiondir.c_str())) {
-				string oldpng = menu->selSection() + ".png";
-				string newpng = id.getInput() + ".png";
-				string oldicon = sc.getSkinFilePath(oldpng);
-				string newicon = sc.getSkinFilePath(newpng);
-
-				if (!oldicon.empty() && newicon.empty()) {
-					newicon = oldicon;
-					newicon.replace(newicon.find(oldpng), oldpng.length(), newpng);
-
-					if (!fileExists(newicon)) {
-						rename(oldicon.c_str(), newicon.c_str());
-						sc.move("skin:"+oldpng, "skin:"+newpng);
-					}
-				}
-				menu->renameSection(menu->selSectionIndex(), id.getInput());
-			}
-		}
-	}
+void GMenu2X::deleteSection()
+{
+	menu->deleteSelectedSection();
 }
-
-void GMenu2X::deleteSection() {
-	MessageBox mb(this,tr["You will lose all the links in this section."]+"\n"+tr["Are you sure?"]);
-	mb.setButton(InputManager::ACCEPT, tr["Yes"]);
-	mb.setButton(InputManager::CANCEL, tr["No"]);
-	if (mb.exec() == InputManager::ACCEPT) {
-
-		if (rmtree(getHome() + "/sections/" + menu->selSection()))
-			menu->deleteSelectedSection();
-	}
-}
-
-typedef struct {
-	unsigned short batt;
-	unsigned short remocon;
-} MMSP2ADC;
-
-#ifdef ENABLE_CPUFREQ
-void GMenu2X::setClock(unsigned mhz) {
-	mhz = constrain(mhz, cpuFreqMin, confInt["maxClock"]);
-#if defined(PLATFORM_A320) || defined(PLATFORM_GCW0) || defined(PLATFORM_NANONOTE)
-	jz_cpuspeed(mhz);
-#endif
-}
-#endif
 
 string GMenu2X::getDiskFree(const char *path) {
-	string df = "";
-	struct statvfs b;
+	
+	std::error_code ec;
+	auto space = std::experimental::filesystem::space(path, ec);
 
-	int ret = statvfs(path, &b);
-	if (ret == 0) {
+	string df = "";
+
+	if (!ec) {
 		// Make sure that the multiplication happens in 64 bits.
-		unsigned long freeMiB =
-				((unsigned long long)b.f_bfree * b.f_bsize) / (1024 * 1024);
-		unsigned long totalMiB =
-				((unsigned long long)b.f_blocks * b.f_frsize) / (1024 * 1024);
+		unsigned long freeMiB = space.free / (1024 * 1024);
+		unsigned long totalMiB = space.capacity / (1024 * 1024);
 		stringstream ss;
 		if (totalMiB >= 10000) {
 			ss << (freeMiB / 1024) << "." << ((freeMiB % 1024) * 10) / 1024 << "/"
@@ -1113,45 +978,47 @@ string GMenu2X::getDiskFree(const char *path) {
 			ss << freeMiB << "/" << totalMiB << "MiB";
 		}
 		ss >> df;
-	} else WARNING("statvfs failed with error '%s'.\n", strerror(errno));
+	} else WARNING("statvfs failed with error '%s'.\n", ec.message().c_str());
 	return df;
 }
 
-int GMenu2X::drawButton(Surface& s, const string &btn, const string &text, int x, int y) {
+int GMenu2X::drawButton(Surface& surface, const string &btn,
+			const string &text, int x, int y) {
 	int w = 0;
 	auto icon = sc["skin:imgs/buttons/" + btn + ".png"];
 	if (icon) {
-		if (y < 0) y = resY + y;
+		if (y < 0) y = height() + y;
 		w = icon->width();
-		icon->blit(s, x, y - 7);
+		icon->blit(surface, x, y - 7);
 		if (!text.empty()) {
 			w += 3;
-			w += font->write(
-					s, text, x + w, y, Font::HAlignLeft, Font::VAlignMiddle);
+			w += font->write(surface, text, x + w, y,
+					 Font::HAlignLeft, Font::VAlignMiddle);
 			w += 6;
 		}
 	}
 	return x + w;
 }
 
-int GMenu2X::drawButtonRight(Surface& s, const string &btn, const string &text, int x, int y) {
+int GMenu2X::drawButtonRight(Surface& surface, const string &btn,
+			     const string &text, int x, int y) {
 	int w = 0;
 	auto icon = sc["skin:imgs/buttons/" + btn + ".png"];
 	if (icon) {
-		if (y < 0) y = resY + y;
+		if (y < 0) y = height() + y;
 		w = icon->width();
-		icon->blit(s, x - w, y - 7);
+		icon->blit(surface, x - w, y - 7);
 		if (!text.empty()) {
 			w += 3;
-			w += font->write(
-					s, text, x - w, y, Font::HAlignRight, Font::VAlignMiddle);
+			w += font->write(surface, text, x - w, y,
+					 Font::HAlignRight, Font::VAlignMiddle);
 			w += 6;
 		}
 	}
 	return x - w;
 }
 
-void GMenu2X::drawScrollBar(uint pageSize, uint totalSize, uint pagePos) {
+void GMenu2X::drawScrollBar(uint32_t pageSize, uint32_t totalSize, uint32_t pagePos) {
 	if (totalSize <= pageSize) {
 		// Everything fits on one screen, no scroll bar needed.
 		return;
@@ -1162,33 +1029,42 @@ void GMenu2X::drawScrollBar(uint pageSize, uint totalSize, uint pagePos) {
 	top += 1;
 	height -= 2;
 
-	s->rectangle(resX - 8, top, 7, height, skinConfColors[COLOR_SELECTION_BG]);
+	s->rectangle(width() - 8, top, 7, height,
+		     skinConfColors[COLOR_SELECTION_BG]);
 	top += 2;
 	height -= 4;
 
-	const uint barSize = max(height * pageSize / totalSize, 4u);
-	const uint barPos = (height - barSize) * pagePos / (totalSize - pageSize);
+	const uint32_t barSize = std::max(height * pageSize / totalSize, 4u);
+	const uint32_t barPos = (height - barSize) * pagePos / (totalSize - pageSize);
 
-	s->box(resX - 6, top + barPos, 3, barSize,
-			skinConfColors[COLOR_SELECTION_BG]);
+	s->box(width() - 6, top + barPos, 3, barSize,
+	       skinConfColors[COLOR_SELECTION_BG]);
 }
 
-void GMenu2X::drawTopBar(Surface& s) {
-	Surface *bar = sc.skinRes("imgs/topbar.png", false);
+void GMenu2X::drawTopBar(Surface& surface) {
+	Surface *bar = nullptr;
+	if (!skinConfInt["topBarBgUseColor"])
+		bar = sc.skinRes("imgs/topbar.png", false);
 	if (bar) {
-		bar->blit(s, 0, 0);
+		for (unsigned int x = 0; x < width(); x++)
+			bar->blit(surface, x, 0);
 	} else {
 		const int h = skinConfInt["topBarHeight"];
-		s.box(0, 0, resX, h, skinConfColors[COLOR_TOP_BAR_BG]);
+		surface.box(0, 0, width(), h,
+			    skinConfColors[COLOR_TOP_BAR_BG]);
 	}
 }
 
-void GMenu2X::drawBottomBar(Surface& s) {
-	Surface *bar = sc.skinRes("imgs/bottombar.png", false);
+void GMenu2X::drawBottomBar(Surface& surface) {
+	Surface *bar = nullptr;
+	if (!skinConfInt["bottomBarBgUseColor"])
+		bar = sc.skinRes("imgs/bottombar.png", false);
 	if (bar) {
-		bar->blit(s, 0, resY-bar->height());
+		for (unsigned int x = 0; x < width(); x++)
+			bar->blit(surface, x, height() - bar->height());
 	} else {
 		const int h = skinConfInt["bottomBarHeight"];
-		s.box(0, resY - h, resX, h, skinConfColors[COLOR_BOTTOM_BAR_BG]);
+		surface.box(0, height() - h, width(), h,
+		      skinConfColors[COLOR_BOTTOM_BAR_BG]);
 	}
 }

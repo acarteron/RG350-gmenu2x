@@ -18,19 +18,18 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
+#include "buildopts.h"
 #include "filedialog.h"
-
 #include "filelister.h"
-#include "gmenu2x.h"
 
 using namespace std;
 
 FileDialog::FileDialog(
-		GMenu2X *gmenu2x, Touchscreen &ts, const string &text,
+		GMenu2X& gmenu2x, const string &text,
 		const string &filter, const string &file, const string &title)
-	: BrowseDialog(gmenu2x, ts, title, text)
+	: BrowseDialog(gmenu2x, title, text)
 {
-	string path(CARD_ROOT);
+	string path(GMENU2X_CARD_ROOT);
 	if (!file.empty()) {
 		string::size_type pos = file.rfind("/");
 		if (pos != string::npos)

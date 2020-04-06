@@ -8,7 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-PowerSaver *PowerSaver::instance = nullptr;
+std::shared_ptr<PowerSaver> PowerSaver::instance;
 
 Uint32 screenTimerCallback(Uint32 timeout, void *d) {
 	unsigned int * old_ticks = (unsigned int *) d;
@@ -25,19 +25,24 @@ Uint32 screenTimerCallback(Uint32 timeout, void *d) {
 	return 0;
 }
 
+std::shared_ptr<PowerSaver> PowerSaver::getInstance()
+{
+	if (!instance)
+		instance = std::shared_ptr<PowerSaver>(new PowerSaver());
+
+	return instance;
+}
+
 PowerSaver::PowerSaver()
 	: screenState(false)
 	, screenTimeout(0)
 	, screenTimer(nullptr)
 {
 	enableScreen();
-	assert(!instance);
-	instance = this;
 }
 
 PowerSaver::~PowerSaver() {
 	removeScreenTimer();
-	instance = nullptr;
 	enableScreen();
 }
 
@@ -74,7 +79,9 @@ void PowerSaver::removeScreenTimer() {
 #define SCREEN_BLANK_PATH "/sys/class/graphics/fb0/blank"
 void PowerSaver::setScreenBlanking(bool state) {
 	const char *path = SCREEN_BLANK_PATH;
-	const char *blank = state ? "0" : "1";
+	const char *blank = state
+		? "0" /* FB_BLANK_UNBLANK */
+		: "4" /* FB_BLANK_POWERDOWN */;
 
 	int fd = open(path, O_RDWR);
 	if (fd == -1) {
